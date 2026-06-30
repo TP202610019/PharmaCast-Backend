@@ -1,0 +1,19 @@
+# Build output
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Local settings overrides (never commit real secrets)
+appsettings.local.json
+appsettings.*.local.json
+appsettings.Development.json
+
+# Logs
+*.log
+logs/

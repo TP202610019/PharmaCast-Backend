@@ -1,0 +1,27 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using PharmacyApiService.Domain.Entities;
+
+namespace PharmacyApiService.Infrastructure.Persistence.Configurations;
+
+public class HistoricalDailyPointConfiguration : IEntityTypeConfiguration<HistoricalDailyPoint>
+{
+    public void Configure(EntityTypeBuilder<HistoricalDailyPoint> builder)
+    {
+        builder.ToTable("historical_daily_points");
+        builder.HasKey(x => x.Id);
+
+        builder.Property(x => x.Id).HasColumnName("id");
+        builder.Property(x => x.PredictionExecutionId).HasColumnName("prediction_execution_id").IsRequired();
+        builder.Property(x => x.ProductName).HasColumnName("product_name").IsRequired();
+        builder.Property(x => x.Date).HasColumnName("date").IsRequired();
+        builder.Property(x => x.Quantity).HasColumnName("quantity").IsRequired();
+
+        builder.HasOne(x => x.PredictionExecution)
+               .WithMany()
+               .HasForeignKey(x => x.PredictionExecutionId)
+               .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasIndex(x => new { x.PredictionExecutionId, x.ProductName });
+    }
+}
