@@ -184,9 +184,17 @@ public class PurchasePlanService : IPurchasePlanService
             return System.Text.RegularExpressions.Regex.Replace(clean, @"\s+", " ").Trim();
         }
 
-        var normalizedSales   = actualSales.ToDictionary(kv => NormName(kv.Key), kv => kv.Value, StringComparer.OrdinalIgnoreCase);
-        var normalizedPrices  = actualPrices.ToDictionary(kv => NormName(kv.Key), kv => kv.Value, StringComparer.OrdinalIgnoreCase);
-        var normalizedPharmacy = pharmacyPlan?.ToDictionary(kv => NormName(kv.Key), kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+        // GroupBy+Sum instead of ToDictionary to handle names that normalize to the same key
+        // e.g. "PRODUCT X 20 UNID." and "PRODUCT X 20 UNID" both → "product x 20 unid"
+        var normalizedSales = actualSales
+            .GroupBy(kv => NormName(kv.Key), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Sum(kv => kv.Value), StringComparer.OrdinalIgnoreCase);
+        var normalizedPrices = actualPrices
+            .GroupBy(kv => NormName(kv.Key), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Average(kv => kv.Value), StringComparer.OrdinalIgnoreCase);
+        var normalizedPharmacy = pharmacyPlan?
+            .GroupBy(kv => NormName(kv.Key), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Sum(kv => kv.Value), StringComparer.OrdinalIgnoreCase);
 
         // Only evaluate products that appear in the actual-sales CSV.
         var items = plan.Items
