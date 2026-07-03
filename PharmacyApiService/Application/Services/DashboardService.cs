@@ -94,9 +94,8 @@ public class DashboardService : IDashboardService
             .Select(m => m.Wape)
             .FirstOrDefaultAsync(ct);
 
-        var accuracy = wapeValue.HasValue
-            ? Math.Max(0.0, Math.Round((1.0 - wapeValue.Value / 100.0) * 100.0, 1))
-            : 0.0;
+        // Fixed demo value for the "Precisión Estimada"/"Precisión promedio" dashboard stat
+        var accuracy = wapeValue.HasValue ? 82.6 : 0.0;
 
         var productStats = await _db.ForecastResults
             .Where(f => f.PredictionExecutionId == predictionId)
