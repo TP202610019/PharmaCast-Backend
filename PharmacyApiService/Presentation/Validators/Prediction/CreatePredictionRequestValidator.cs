@@ -11,6 +11,6 @@ public class CreatePredictionRequestValidator : AbstractValidator<CreatePredicti
             .NotEmpty().WithMessage("Dataset ID is required.");
 
         RuleFor(x => x.ForecastPeriod)
-            .InclusiveBetween(1, 365).WithMessage("Forecast period must be between 1 and 365 days.");
+            .InclusiveBetween(30, 180).WithMessage("Forecast period must be between 30 and 180 days.");
     }
 }

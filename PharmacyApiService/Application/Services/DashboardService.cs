@@ -72,11 +72,11 @@ public class DashboardService : IDashboardService
         var mappingFields = await _db.MappingConfigurations
             .Where(mc => mc.Datasets.Any(d => d.Id == execution.DatasetId))
             .SelectMany(mc => mc.Fields)
-            .Where(f => f.MappingField != null && (f.MappingField.FieldKey == "product" || f.MappingField.FieldKey == "quantity"))
+            .Where(f => f.MappingField != null && (f.MappingField.FieldKey == "product_id" || f.MappingField.FieldKey == "quantity"))
             .Select(f => new { f.MappingField!.FieldKey, f.DatasetColumnName })
             .ToListAsync(ct);
 
-        var salesProductCol  = mappingFields.FirstOrDefault(f => f.FieldKey == "product")?.DatasetColumnName;
+        var salesProductCol  = mappingFields.FirstOrDefault(f => f.FieldKey == "product_id")?.DatasetColumnName;
         var salesQuantityCol = mappingFields.FirstOrDefault(f => f.FieldKey == "quantity")?.DatasetColumnName;
 
         var summary = await BuildSummaryResponseAsync(execution.Id, execution.CreatedAt, execution.ForecastPeriod, execution.ExecutionStatus, ct);

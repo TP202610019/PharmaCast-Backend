@@ -12,7 +12,6 @@ public class MLPredictionResponse
     /// <summary>"Completed" | "Failed" | "Processing"</summary>
     public string Status { get; set; } = string.Empty;
 
-    public bool IsRetrain { get; set; }
     public string? StartedAt { get; set; }
     public string? CompletedAt { get; set; }
 
@@ -24,9 +23,6 @@ public class MLPredictionResponse
 
     /// <summary>Forecast entries: one row per (product, date) pair.</summary>
     public List<MLForecastEntry> Forecast { get; set; } = [];
-
-    /// <summary>Paths to stored artifacts (for auditing / debugging).</summary>
-    public Dictionary<string, string> ArtifactPaths { get; set; } = [];
 
     public string? ErrorMessage { get; set; }
 
