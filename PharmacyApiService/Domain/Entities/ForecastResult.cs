@@ -7,6 +7,7 @@ public class ForecastResult : BaseEntity
 
     public string ProductName { get; set; } = string.Empty;
     public DateTime ForecastDate { get; set; }
+    public int? ForecastStep { get; set; }
     public double PredictedQuantity { get; set; }
     public double? LowerBound { get; set; }
     public double? UpperBound { get; set; }

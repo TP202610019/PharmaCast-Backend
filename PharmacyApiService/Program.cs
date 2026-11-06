@@ -8,7 +8,14 @@ System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Inst
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddControllers(options => options.Filters.Add<ValidationBehavior>());
+builder.Services.AddControllers(options => options.Filters.Add<ValidationBehavior>())
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.Converters.Add(
+            new System.Text.Json.Serialization.JsonStringEnumConverter<PharmacyApiService.Domain.Enums.MetricMethod>(allowIntegerValues: false));
+        options.JsonSerializerOptions.Converters.Add(
+            new System.Text.Json.Serialization.JsonStringEnumConverter<PharmacyApiService.Domain.Enums.MetricScope>(allowIntegerValues: false));
+    });
 
 builder.Services.AddSwaggerGen(options =>
 {

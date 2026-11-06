@@ -32,7 +32,7 @@ public class DatasetService : IDatasetService
 
     // ── Upload ────────────────────────────────────────────────────────────────
 
-    public async Task<DatasetResponse> UploadAsync(
+    public async Task<DatasetUploadResult> UploadAsync(
         IFormFile file,
         Guid userId,
         Guid? mappingConfigId,
@@ -42,8 +42,15 @@ public class DatasetService : IDatasetService
             "[UPLOAD-START] UploadAsync — userId={UserId}, fileName={FileName}, size={Size}B, mappingConfigId={MappingId}",
             userId, file.FileName, file.Length, mappingConfigId);
 
-        // 1. Basic constraints
-        ValidateFileConstraints(file);
+        // Invalid input is a normal API result, not an exception for the debugger.
+        var fileError = DatasetFileValidator.GetConstraintError(file);
+        if (fileError is not null)
+            return new DatasetUploadResult(null, fileError);
+
+        var (rowCount, structureError) = await DatasetFileValidator.CheckStructureAsync(file, ct);
+        if (structureError is not null)
+            return new DatasetUploadResult(null, structureError);
+
         _logger.LogInformation("[UPLOAD-1] File constraints OK — ext={Ext}, size={Size}B", Path.GetExtension(file.FileName), file.Length);
 
         // 2. Mapping config: existence + ownership + column existence check (if provided)
@@ -82,59 +89,31 @@ public class DatasetService : IDatasetService
             BlobContainer = AppConstants.Blob.TemporaryDatasetContainer,
             FileType = fileType,
             DatasetStage = DatasetStage.Temporary,
-            UploadStatus = UploadStatus.Pending
+            UploadStatus = UploadStatus.Pending,
+            RowsCount = rowCount
         };
 
-        await _datasets.AddAsync(dataset, ct);
-        await _datasets.SaveChangesAsync(ct);
-        _logger.LogInformation("[UPLOAD-3] Dataset record persisted — datasetId={DatasetId}", dataset.Id);
-
-        // 4. Structural validation — errors mark the record Failed and rethrow
-        _logger.LogInformation("[UPLOAD-4] Running structural validation — fileType={FileType}...", fileType);
-        int? rowCount = null;
         try
         {
-            rowCount = await ValidateStructureAsync(file, ct);
-            _logger.LogInformation("[UPLOAD-4] Structural validation OK — rowCount={RowCount}", rowCount);
+            await _datasets.AddAsync(dataset, ct);
+            await _datasets.SaveChangesAsync(ct);
         }
-        catch (ValidationException vex)
+        catch
         {
-            _logger.LogWarning("[UPLOAD-4] Structural validation FAILED — {Error}", vex.Message);
-            await MarkFailedAndCleanupAsync(dataset, blobPath, ct);
+            try
+            {
+                await _blob.DeleteAsync(AppConstants.Blob.TemporaryDatasetContainer,
+                    blobPath, CancellationToken.None);
+            }
+            catch (Exception cleanupError)
+            {
+                _logger.LogWarning(cleanupError, "Could not compensate temporary upload {BlobPath}", blobPath);
+            }
             throw;
         }
+        _logger.LogInformation("[UPLOAD-3] Dataset record persisted — datasetId={DatasetId}", dataset.Id);
 
-        // 5. Move to raw-datasets (stage = Raw, status = Completed)
-        _logger.LogInformation(
-            "[UPLOAD-5] Moving file to raw storage — from={From} to={To}",
-            AppConstants.Blob.TemporaryDatasetContainer, AppConstants.Blob.RawDatasetContainer);
-        try
-        {
-            await _blob.MoveAsync(
-                AppConstants.Blob.TemporaryDatasetContainer, blobPath,
-                AppConstants.Blob.RawDatasetContainer, blobPath,
-                ct);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogError(ex, "[UPLOAD-5] File move to raw storage FAILED");
-            await MarkFailedAndCleanupAsync(dataset, blobPath, ct);
-            throw new ExternalServiceException("Storage", "The file could not be moved to validated storage.");
-        }
-
-        dataset.DatasetStage = DatasetStage.Raw;
-        dataset.UploadStatus = UploadStatus.Completed;
-        dataset.BlobContainer = AppConstants.Blob.RawDatasetContainer;
-        dataset.RowsCount = rowCount;
-        dataset.UpdatedAt = DateTime.UtcNow;
-        _datasets.Update(dataset);
-        await _datasets.SaveChangesAsync(ct);
-
-        _logger.LogInformation(
-            "[UPLOAD-DONE] Upload complete — datasetId={DatasetId}, stage=Raw, status=Completed, rowCount={RowCount}",
-            dataset.Id, rowCount);
-
-        return MapToResponse(dataset);
+        return new DatasetUploadResult(MapToResponse(dataset), null);
     }
 
     // ── Other operations ──────────────────────────────────────────────────────
@@ -164,16 +143,79 @@ public class DatasetService : IDatasetService
         if (dataset.UploadedBy != userId)
             throw new ForbiddenException();
 
-        // No-op if already validated; otherwise mark as processed
-        if (dataset.DatasetStage < DatasetStage.Processed)
+        if (!dataset.MappingConfigurationId.HasValue)
+            throw new ValidationException("mappingConfigurationId", "Confirma el dataset con una configuración de mapeo.");
+        return await ConfirmAsync(datasetId, userId,
+            new ConfirmDatasetRequest { MappingConfigurationId = dataset.MappingConfigurationId.Value }, ct);
+    }
+
+    public async Task<DatasetResponse> ConfirmAsync(
+        Guid datasetId, Guid userId, ConfirmDatasetRequest request, CancellationToken ct = default)
+    {
+        var dataset = await _datasets.GetByIdAsync(datasetId, ct)
+            ?? throw new NotFoundException(nameof(Dataset), datasetId);
+        if (dataset.UploadedBy != userId) throw new ForbiddenException();
+        if (request.FieldType is not ("sales" or "inventory"))
+            throw new ValidationException("fieldType", "Usa sales o inventory.");
+        var mapping = await _mappings.GetByIdWithFieldsAsync(request.MappingConfigurationId, ct)
+            ?? throw new NotFoundException(nameof(MappingConfiguration), request.MappingConfigurationId);
+        if (mapping.UserId != userId) throw new ForbiddenException();
+
+        var headers = await ExtractHeadersAsync(datasetId, userId, ct);
+        ValidateConfirmationMapping(headers, mapping, request.FieldType);
+        if (dataset.DatasetStage == DatasetStage.Raw && dataset.UploadStatus == UploadStatus.Completed)
         {
-            dataset.DatasetStage = DatasetStage.Processed;
-            dataset.UpdatedAt = DateTime.UtcNow;
+            if (dataset.MappingConfigurationId != mapping.Id)
+                throw new ConflictException("El dataset ya fue confirmado con otro mapeo.");
+            return MapToResponse(dataset);
+        }
+        if (dataset.DatasetStage != DatasetStage.Temporary || dataset.UploadStatus != UploadStatus.Pending)
+            throw new ValidationException("dataset", "Solo se pueden confirmar datasets Temporary/Pending.");
+        if (dataset.BlobContainer != AppConstants.Blob.TemporaryDatasetContainer || dataset.BlobPath is null)
+            throw new ValidationException("dataset", "El dataset no tiene un archivo temporal válido.");
+
+        var source = dataset.BlobContainer;
+        var destination = AppConstants.Blob.RawDatasetContainer;
+        await _blob.MoveAsync(source, dataset.BlobPath, destination, dataset.BlobPath, ct);
+        try
+        {
+            dataset.MappingConfigurationId = mapping.Id;
+            dataset.DatasetStage = DatasetStage.Raw;
+            dataset.UploadStatus = UploadStatus.Completed;
+            dataset.BlobContainer = destination;
             _datasets.Update(dataset);
             await _datasets.SaveChangesAsync(ct);
         }
-
+        catch
+        {
+            // Compensate storage promotion if the metadata cannot be committed.
+            await _blob.MoveAsync(destination, dataset.BlobPath, source, dataset.BlobPath, CancellationToken.None);
+            throw;
+        }
         return MapToResponse(dataset);
+    }
+
+    private static void ValidateConfirmationMapping(
+        IReadOnlyList<string> headers, MappingConfiguration mapping, string fieldType)
+    {
+        var fields = mapping.Fields.Where(f => f.MappingField?.IsActive == true).ToList();
+        string[][] required = fieldType == "inventory"
+            ? [["inv_product", "product", "product_id"], ["stock"]]
+            : [["date"], ["product", "product_id"], ["quantity"]];
+        foreach (var aliases in required)
+        {
+            var matches = fields.Where(f => aliases.Contains(f.MappingField!.FieldKey, StringComparer.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(f.DatasetColumnName)).ToList();
+            if (matches.Count == 0 || matches.Any(f => !headers.Contains(f.DatasetColumnName.Trim(), StringComparer.OrdinalIgnoreCase))
+                || matches.Select(f => f.DatasetColumnName.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 1)
+                throw new ValidationException("mappingConfigurationId",
+                    $"Falta una columna válida y no ambigua para el campo requerido '{aliases[0]}'.");
+        }
+        foreach (var field in fields.Where(f => f.MappingField!.FieldType == fieldType
+            || required.Any(aliases => aliases.Contains(f.MappingField!.FieldKey, StringComparer.OrdinalIgnoreCase))))
+            if (!string.IsNullOrWhiteSpace(field.DatasetColumnName)
+                && !headers.Contains(field.DatasetColumnName.Trim(), StringComparer.OrdinalIgnoreCase))
+                throw new ValidationException("mappingConfigurationId", $"La columna '{field.DatasetColumnName}' no existe en el archivo.");
     }
 
     public async Task DeleteAsync(Guid datasetId, Guid userId, CancellationToken ct = default)
@@ -184,10 +226,17 @@ public class DatasetService : IDatasetService
         if (dataset.UploadedBy != userId)
             throw new ForbiddenException();
 
+        var details = await _datasets.GetWithDetailsAsync(datasetId, ct);
+        if (dataset.DatasetStage != DatasetStage.Temporary
+            || dataset.UploadStatus != UploadStatus.Pending
+            || details?.PredictionExecutions.Count > 0)
+            throw new ConflictException("Solo se pueden eliminar datasets temporales pendientes y sin uso.");
+
         if (dataset.BlobPath is not null && dataset.BlobContainer is not null)
         {
             try { await _blob.DeleteAsync(dataset.BlobContainer, dataset.BlobPath, ct); }
-            catch { /* silently ignore — file may not exist */ }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            { throw new ExternalServiceException("Storage", "No se pudo eliminar el archivo temporal."); }
         }
 
         _datasets.Remove(dataset);
@@ -195,74 +244,6 @@ public class DatasetService : IDatasetService
     }
 
     // ── Validation helpers ────────────────────────────────────────────────────
-
-    private static void ValidateFileConstraints(IFormFile file)
-    {
-        if (file.Length == 0)
-            throw new ValidationException("file", "File cannot be empty.");
-
-        if (file.Length > AppConstants.MaxFileSizeBytes)
-            throw new ValidationException("file",
-                $"File exceeds the maximum allowed size of {AppConstants.MaxFileSizeBytes / (1024 * 1024)} MB.");
-
-        var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
-        if (!AppConstants.AllowedFileExtensions.Dataset.Contains(ext))
-            throw new ValidationException("file",
-                $"File type '{ext}' is not allowed. Allowed types: {string.Join(", ", AppConstants.AllowedFileExtensions.Dataset)}.");
-    }
-
-    /// <summary>
-    /// Performs lightweight structural validation:
-    /// - CSV: verifies a non-empty header row and at least one data row are present.
-    /// - XLSX: verifies the ZIP magic bytes (PK header).
-    /// - XLS: verifies the OLE2 compound-document magic bytes.
-    /// Returns the data row count for CSV; null for Excel (row count delegated to ML Service).
-    /// </summary>
-    private static async Task<int?> ValidateStructureAsync(IFormFile file, CancellationToken ct)
-    {
-        var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
-
-        if (ext == ".csv")
-        {
-            using var reader = new StreamReader(file.OpenReadStream());
-            var header = await reader.ReadLineAsync(ct);
-            if (string.IsNullOrWhiteSpace(header))
-                throw new ValidationException("file", "CSV file has no header row.");
-
-            int rows = 0;
-            while (await reader.ReadLineAsync(ct) is string line)
-                if (!string.IsNullOrWhiteSpace(line)) rows++;
-
-            if (rows < 1)
-                throw new ValidationException("file", "CSV file must contain at least one data row.");
-
-            return rows;
-        }
-
-        if (ext == ".xlsx")
-        {
-            // XLSX is a ZIP archive → magic bytes PK (0x50 0x4B)
-            using var stream = file.OpenReadStream();
-            var magic = new byte[2];
-            if (await stream.ReadAsync(magic, ct) < 2 || magic[0] != 0x50 || magic[1] != 0x4B)
-                throw new ValidationException("file", "The file does not appear to be a valid XLSX file.");
-            return null;
-        }
-
-        if (ext == ".xls")
-        {
-            // XLS (OLE2 compound document) → magic bytes D0 CF 11 E0
-            using var stream = file.OpenReadStream();
-            var magic = new byte[4];
-            if (await stream.ReadAsync(magic, ct) < 4
-                || magic[0] != 0xD0 || magic[1] != 0xCF
-                || magic[2] != 0x11 || magic[3] != 0xE0)
-                throw new ValidationException("file", "The file does not appear to be a valid XLS file.");
-            return null;
-        }
-
-        return null;
-    }
 
     // ── Storage helpers ───────────────────────────────────────────────────────
 
@@ -646,7 +627,7 @@ public class DatasetService : IDatasetService
     {
         var normalized = headers.Select(h => h.ToLowerInvariant()).ToHashSet();
         var missing = mapping.Fields
-            .Where(f => f.MappingField?.IsRequired == true
+            .Where(f => !string.IsNullOrWhiteSpace(f.DatasetColumnName)
                         && !normalized.Contains(f.DatasetColumnName.ToLowerInvariant()))
             .Select(f => $"'{f.DatasetColumnName}' ({f.MappingField!.DisplayName})")
             .ToList();

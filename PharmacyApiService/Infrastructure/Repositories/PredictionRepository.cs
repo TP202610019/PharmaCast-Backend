@@ -30,57 +30,26 @@ public class PredictionRepository : GenericRepository<PredictionExecution>, IPre
                      .OrderByDescending(p => p.CreatedAt)
                      .ToListAsync(ct);
 
-    public async Task AddForecastResultsAsync(IEnumerable<ForecastResult> results, CancellationToken ct = default)
+    public async Task SaveResultsAsync(PredictionExecution execution, IEnumerable<ForecastResult> forecasts,
+        IEnumerable<PredictionMetric> metrics,
+        CancellationToken ct = default)
     {
-        _db.ChangeTracker.AutoDetectChangesEnabled = false;
+        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
         try
         {
-            foreach (var chunk in results.Chunk(500))
-            {
-                _db.ForecastResults.AddRange(chunk);
-                await _db.SaveChangesAsync(CancellationToken.None);
-                _db.ChangeTracker.Clear();
-            }
+            // The backend owns every result row. All batches and Completed commit together.
+            await SalesBulkWriter.ForecastAsync(_db, forecasts, ct);
+            _db.PredictionMetrics.AddRange(metrics);
+            _db.PredictionExecutions.Update(execution);
+            await _db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
         }
-        finally
+        catch
         {
-            _db.ChangeTracker.AutoDetectChangesEnabled = true;
-        }
-    }
-
-    public async Task AddMetricsAsync(IEnumerable<PredictionMetric> metrics, CancellationToken ct = default)
-    {
-        _db.ChangeTracker.AutoDetectChangesEnabled = false;
-        try
-        {
-            foreach (var chunk in metrics.Chunk(500))
-            {
-                _db.PredictionMetrics.AddRange(chunk);
-                await _db.SaveChangesAsync(CancellationToken.None);
-                _db.ChangeTracker.Clear();
-            }
-        }
-        finally
-        {
-            _db.ChangeTracker.AutoDetectChangesEnabled = true;
-        }
-    }
-
-    public async Task AddHistoricalPointsAsync(IEnumerable<HistoricalDailyPoint> points, CancellationToken ct = default)
-    {
-        _db.ChangeTracker.AutoDetectChangesEnabled = false;
-        try
-        {
-            foreach (var chunk in points.Chunk(500))
-            {
-                _db.HistoricalDailyPoints.AddRange(chunk);
-                await _db.SaveChangesAsync(CancellationToken.None);
-                _db.ChangeTracker.Clear();
-            }
-        }
-        finally
-        {
-            _db.ChangeTracker.AutoDetectChangesEnabled = true;
+            await transaction.RollbackAsync(CancellationToken.None);
+            // Do not retry rolled-back Added result entities when persisting Failed.
+            _db.ChangeTracker.Clear();
+            throw;
         }
     }
 }
