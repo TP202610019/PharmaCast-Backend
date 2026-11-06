@@ -388,7 +388,13 @@ public class DatasetService : IDatasetService
         };
 
         var result = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-        using var excelReader = ExcelReaderFactory.CreateReader(stream, config);
+        // Excel readers require seeking, which downloaded blob streams may not support.
+        using var seekableCopy = new MemoryStream();
+        if (!stream.CanSeek)
+            stream.CopyTo(seekableCopy);
+        seekableCopy.Position = 0;
+        using var excelReader = ExcelReaderFactory.CreateReader(
+            stream.CanSeek ? stream : seekableCopy, config);
 
         do
         {
@@ -553,7 +559,13 @@ public class DatasetService : IDatasetService
             LeaveOpen = false,
         };
 
-        using var excelReader = ExcelReaderFactory.CreateReader(stream, config);
+        // Excel readers require seeking, which downloaded blob streams may not support.
+        using var seekableCopy = new MemoryStream();
+        if (!stream.CanSeek)
+            stream.CopyTo(seekableCopy);
+        seekableCopy.Position = 0;
+        using var excelReader = ExcelReaderFactory.CreateReader(
+            stream.CanSeek ? stream : seekableCopy, config);
 
         // Iterate worksheets until one with enough structured content is found
         do
