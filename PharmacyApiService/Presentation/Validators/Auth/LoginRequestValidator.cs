@@ -8,11 +8,11 @@ public class LoginRequestValidator : AbstractValidator<LoginRequest>
     public LoginRequestValidator()
     {
         RuleFor(x => x.Email)
-            .NotEmpty().WithMessage("Email is required.")
-            .EmailAddress().WithMessage("Invalid email format.");
+            .NotEmpty().WithMessage("Ingresa tu correo.")
+            .EmailAddress().WithMessage("Formato de correo no válido.");
 
         RuleFor(x => x.Password)
-            .NotEmpty().WithMessage("Password is required.")
-            .MinimumLength(6).WithMessage("Password must be at least 6 characters.");
+            .NotEmpty().WithMessage("Ingresa tu contraseña.")
+            .MinimumLength(6).WithMessage("Usa al menos 6 caracteres.");
     }
 }

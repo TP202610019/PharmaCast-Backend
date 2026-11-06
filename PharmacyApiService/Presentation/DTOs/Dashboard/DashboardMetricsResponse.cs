@@ -4,6 +4,7 @@ namespace PharmacyApiService.Presentation.DTOs.Dashboard;
 
 public class DashboardMetricsResponse
 {
+    public double? AverageAccuracy { get; set; }
     public int TotalDatasets { get; set; }
     public int TotalPredictions { get; set; }
     public int CompletedPredictions { get; set; }

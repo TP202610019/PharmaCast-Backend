@@ -36,8 +36,20 @@ public class DashboardService : IDashboardService
             })
             .ToListAsync(ct);
 
+        // One aggregate metric per completed execution; product rows and failed runs
+        // must not bias the user's overall accuracy.
+        var aggregateWapes = await _db.PredictionMetrics
+            .Where(m => m.ProductName == null && m.Wape.HasValue
+                && m.PredictionExecution.ExecutedBy == userId
+                && m.PredictionExecution.ExecutionStatus == ExecutionStatus.Completed)
+            .Select(m => m.Wape!.Value)
+            .ToListAsync(ct);
+        double? averageAccuracy = aggregateWapes.Count == 0 ? null
+            : Math.Round(aggregateWapes.Average(wape => Math.Max(0.0, 100.0 - wape)), 1);
+
         return new DashboardMetricsResponse
         {
+            AverageAccuracy = averageAccuracy,
             TotalDatasets = totalDatasets,
             TotalPredictions = totalPredictions,
             CompletedPredictions = completedPredictions,

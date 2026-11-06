@@ -7,7 +7,7 @@ public class RefreshTokenRequestValidator : AbstractValidator<RefreshTokenReques
 {
     public RefreshTokenRequestValidator()
     {
-        RuleFor(x => x.AccessToken).NotEmpty().WithMessage("Access token is required.");
-        RuleFor(x => x.RefreshToken).NotEmpty().WithMessage("Refresh token is required.");
+        RuleFor(x => x.AccessToken).NotEmpty().WithMessage("Falta el token de acceso.");
+        RuleFor(x => x.RefreshToken).NotEmpty().WithMessage("Falta el token de renovación.");
     }
 }

@@ -54,6 +54,8 @@ builder.Services.AddCors(options =>
 
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddFluentValidation();
+builder.Services.AddMemoryCache();
+builder.Services.AddHttpClient("RecoveryEmail", client => client.Timeout = TimeSpan.FromSeconds(10));
 
 var app = builder.Build();
 
