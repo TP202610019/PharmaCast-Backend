@@ -681,6 +681,14 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<double?>("AbsoluteTotalError")
+                        .HasColumnType("double precision")
+                        .HasColumnName("absolute_total_error");
+
+                    b.Property<double?>("ActualTotal")
+                        .HasColumnType("double precision")
+                        .HasColumnName("actual_total");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
@@ -707,6 +715,10 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(20)")
                         .HasColumnName("method");
 
+                    b.Property<double?>("PredictedTotal")
+                        .HasColumnType("double precision")
+                        .HasColumnName("predicted_total");
+
                     b.Property<Guid>("PredictionExecutionId")
                         .HasColumnType("uuid")
                         .HasColumnName("prediction_execution_id");
@@ -729,6 +741,10 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)")
                         .HasColumnName("scope");
+
+                    b.Property<double?>("TotalErrorPercentage")
+                        .HasColumnType("double precision")
+                        .HasColumnName("total_error_percentage");
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")

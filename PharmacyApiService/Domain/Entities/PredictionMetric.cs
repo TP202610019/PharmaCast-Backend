@@ -12,6 +12,10 @@ public class PredictionMetric : BaseEntity
     public MetricMethod Method { get; set; } = MetricMethod.XGBoost;
     public MetricScope Scope { get; set; } = MetricScope.Overall;
 
+    public double? ActualTotal { get; set; }
+    public double? PredictedTotal { get; set; }
+    public double? AbsoluteTotalError { get; set; }
+    public double? TotalErrorPercentage { get; set; }
     public double? Wape { get; set; }
     public double? Mae { get; set; }
     public double? Rmse { get; set; }

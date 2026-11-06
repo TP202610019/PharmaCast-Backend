@@ -20,7 +20,7 @@ public static class ExternalServicesExtensions
         services.AddHttpClient<IMLServiceClient, MLServiceClient>(client =>
         {
             client.BaseAddress = new Uri(mlSettings.BaseUrl);
-            client.Timeout = TimeSpan.FromSeconds(120);
+            client.Timeout = TimeSpan.FromMinutes(5);
         });
 
         var localStorage = config.GetSection(LocalStorageSettings.SectionName).Get<LocalStorageSettings>();

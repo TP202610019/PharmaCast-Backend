@@ -127,7 +127,7 @@ public class PredictionService : IPredictionService
         _logger.LogInformation("[PREDICT-3] Execution record created — executionId={ExecutionId}", execution.Id);
 
         // ── 4. Resolve dataset path and call ML Service ───────────────────────
-        using var processingBudget = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        using var processingBudget = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         try
         {
             var container = dataset.BlobContainer ?? AppConstants.Blob.RawDatasetContainer;
@@ -159,11 +159,10 @@ public class PredictionService : IPredictionService
                 mlRequest.ForecastPeriod,
                 string.Join(", ", fieldDict.Select(kv => $"{kv.Key}='{kv.Value}'")));
 
-            // One shared two-minute budget covers preparation, ML and persistence.
+            // One shared five-minute budget covers ML and persistence.
             // Client disconnects do not cancel the execution independently.
-            var prepared = await _mlClient.PrepareHistoryAsync(mlRequest, processingBudget.Token);
-            await SaveHistoryAsync(dataset.Id, prepared.HistoricalPoints, processingBudget.Token);
             var mlResponse = await _mlClient.PredictAsync(mlRequest, processingBudget.Token);
+            await SaveHistoryAsync(dataset.Id, mlResponse.HistoricalPoints, processingBudget.Token);
             isDemo = mlResponse.IsDemo;
             execution.IsRetrain = mlResponse.IsRetrain;
             execution.ArtifactPaths = mlResponse.ArtifactPaths;
@@ -233,6 +232,10 @@ public class PredictionService : IPredictionService
                     Method        = m.Method,
                     Scope         = m.Scope,
                     Mbe           = m.Mbe,
+                    ActualTotal = m.ActualTotal,
+                    PredictedTotal = m.PredictedTotal,
+                    AbsoluteTotalError = m.AbsoluteTotalError,
+                    TotalErrorPercentage = m.TotalErrorPercentage,
                     Wape          = m.Wape,
                     Rmse          = m.Rmse,
                     Mae           = m.Mae,
@@ -368,8 +371,10 @@ public class PredictionService : IPredictionService
             // Serialize preparation for the same dataset across backend instances.
             await _db.Database.ExecuteSqlInterpolatedAsync(
                 $"SELECT pg_advisory_xact_lock(hashtextextended({datasetId.ToString()}, 0))", ct);
+            // Zero-demand days are reconstructed for charts. Compare only persisted sales
+            // rows so older dense snapshots remain compatible with the sparse format.
             var existing = await _db.HistoricalDailyPoints.AsNoTracking()
-                .Where(h => h.DatasetId == datasetId).ToListAsync(ct);
+                .Where(h => h.DatasetId == datasetId && h.Quantity != 0).ToListAsync(ct);
             if (existing.Count > 0)
             {
                 var expected = rows.ToDictionary(r => (r.ProductName, r.Date), r => r.Quantity);
@@ -401,6 +406,10 @@ public class PredictionService : IPredictionService
         Scope = MetricScope.Overall,
         Rows = m.Rows,
         Mbe = m.Mbe,
+        ActualTotal = m.ActualTotal,
+        PredictedTotal = m.PredictedTotal,
+        AbsoluteTotalError = m.AbsoluteTotalError,
+        TotalErrorPercentage = m.TotalErrorPercentage,
         Wape = m.Wape,
         Rmse = m.Rmse,
         Mae  = m.Mae,
@@ -414,6 +423,10 @@ public class PredictionService : IPredictionService
         Method = method,
         Scope = MetricScope.Product,
         Mbe = pm.Mbe,
+        ActualTotal = pm.ActualTotal,
+        PredictedTotal = pm.PredictedTotal,
+        AbsoluteTotalError = pm.AbsoluteTotalError,
+        TotalErrorPercentage = pm.TotalErrorPercentage,
         Wape          = pm.Wape,
         Rmse          = pm.Rmse,
         Mae           = pm.Mae,
@@ -465,6 +478,10 @@ public class PredictionService : IPredictionService
         Mae = m.Mae,
         Rmse = m.Rmse,
         Mbe = m.Mbe,
+        ActualTotal = m.ActualTotal,
+        PredictedTotal = m.PredictedTotal,
+        AbsoluteTotalError = m.AbsoluteTotalError,
+        TotalErrorPercentage = m.TotalErrorPercentage,
         Mape = m.Mape,
         Rows = m.Rows,
         HistoricalAvg = m.HistoricalAvg

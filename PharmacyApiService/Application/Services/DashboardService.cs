@@ -222,16 +222,27 @@ public class DashboardService : IDashboardService
             };
         }).ToList();
 
-        var historicalPoints = await _db.HistoricalDailyPoints
-            .Where(h => h.DatasetId == _db.PredictionExecutions.Where(e => e.Id == predictionId)
-                .Select(e => e.DatasetId).FirstOrDefault() && h.ProductName == productName)
+        var datasetId = await _db.PredictionExecutions
+            .Where(e => e.Id == predictionId)
+            .Select(e => e.DatasetId)
+            .FirstAsync(ct);
+        var historicalRows = await _db.HistoricalDailyPoints
+            .Where(h => h.DatasetId == datasetId && h.ProductName == productName)
             .OrderBy(h => h.Date)
-            .Select(h => new DashboardHistoricalPoint
-            {
-                Date = h.Date.ToString("yyyy-MM-dd"),
-                Quantity = h.Quantity
-            })
             .ToListAsync(ct);
+        var historicalPoints = new List<DashboardHistoricalPoint>();
+        if (historicalRows.Count > 0)
+        {
+            var datasetEnd = await _db.HistoricalDailyPoints
+                .Where(h => h.DatasetId == datasetId).MaxAsync(h => h.Date, ct);
+            var quantities = historicalRows.ToDictionary(h => h.Date.Date, h => h.Quantity);
+            for (var day = historicalRows[0].Date.Date; day <= datasetEnd.Date; day = day.AddDays(1))
+                historicalPoints.Add(new DashboardHistoricalPoint
+                {
+                    Date = day.ToString("yyyy-MM-dd"),
+                    Quantity = quantities.GetValueOrDefault(day, 0d)
+                });
+        }
 
         return new DashboardChartResponse
         {

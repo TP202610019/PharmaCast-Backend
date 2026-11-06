@@ -48,6 +48,11 @@ public class MLPredictionResponse
 public class MLExecutionMetrics
 {
     public int Rows { get; set; }
+    public double? ActualTotal { get; set; }
+    public double? PredictedTotal { get; set; }
+    public double? AbsoluteTotalError { get; set; }
+    public double? TotalErrorPercentage { get; set; }
+    public double? VolumeAccuracy => TotalErrorPercentage.HasValue ? 100 - TotalErrorPercentage.Value : null;
     public double? Wape { get; set; }
     public double? Mae { get; set; }
     public double? Rmse { get; set; }
@@ -58,6 +63,11 @@ public class MLExecutionMetrics
 public class MLProductMetric
 {
     public string ProductId { get; set; } = string.Empty;
+    public double? ActualTotal { get; set; }
+    public double? PredictedTotal { get; set; }
+    public double? AbsoluteTotalError { get; set; }
+    public double? TotalErrorPercentage { get; set; }
+    public double? VolumeAccuracy => TotalErrorPercentage.HasValue ? 100 - TotalErrorPercentage.Value : null;
     public double? Wape { get; set; }
     public double? Mae { get; set; }
     public double? Rmse { get; set; }
