@@ -5,7 +5,8 @@ namespace PharmacyApiService.Application.Interfaces.Services;
 
 public interface IDatasetService
 {
-    Task<DatasetResponse> UploadAsync(IFormFile file, Guid userId, Guid? mappingConfigId, CancellationToken ct = default);
+    Task<DatasetResponse> ConfirmAsync(Guid datasetId, Guid userId, ConfirmDatasetRequest request, CancellationToken ct = default);
+    Task<DatasetUploadResult> UploadAsync(IFormFile file, Guid userId, Guid? mappingConfigId, CancellationToken ct = default);
     Task<DatasetResponse> GetByIdAsync(Guid id, Guid userId, CancellationToken ct = default);
     Task<IReadOnlyList<DatasetResponse>> GetByUserAsync(Guid userId, CancellationToken ct = default);
     Task<DatasetResponse> ValidateAsync(Guid datasetId, Guid userId, CancellationToken ct = default);

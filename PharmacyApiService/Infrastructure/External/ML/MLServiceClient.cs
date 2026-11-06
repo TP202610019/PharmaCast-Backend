@@ -19,6 +19,7 @@ public class MLServiceClient : IMLServiceClient
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new JsonStringEnumConverter(allowIntegerValues: false) },
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
@@ -78,6 +79,15 @@ public class MLServiceClient : IMLServiceClient
             result.PredictionExecutionId, result.ProductMetrics.Count, result.Forecast.Count);
 
         return result;
+    }
+
+    public async Task<MLPredictionResponse> PrepareHistoryAsync(MLPredictionRequest request, CancellationToken ct = default)
+    {
+        using var response = await _http.PostAsJsonAsync("/api/predictions/prepare-history", request, JsonOptions, ct);
+        if (!response.IsSuccessStatusCode)
+            throw new ExternalServiceException("ML Service", "No se pudo preparar el histórico del dataset.");
+        return await response.Content.ReadFromJsonAsync<MLPredictionResponse>(JsonOptions, ct)
+            ?? throw new ExternalServiceException("ML Service", "El histórico recibido está vacío.");
     }
 
     public async Task<bool> IsHealthyAsync(CancellationToken ct = default)

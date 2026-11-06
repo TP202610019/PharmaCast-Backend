@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using PharmacyApiService.Infrastructure.Persistence;
 using PharmacyApiService.Application.Interfaces.Services;
 using PharmacyApiService.Presentation.DTOs.Prediction;
 using PharmacyApiService.Shared.Extensions;
@@ -14,10 +16,18 @@ public class PredictionController : ControllerBase
 {
     private readonly IPredictionService _service;
 
-    public PredictionController(IPredictionService service)
+    private readonly ApplicationDbContext _db;
+
+    public PredictionController(IPredictionService service, ApplicationDbContext db)
     {
         _service = service;
+        _db = db;
     }
+
+    [HttpGet("periods")]
+    public async Task<IActionResult> GetPeriods(CancellationToken ct)
+        => Ok(await _db.ForecastHorizons.AsNoTracking().OrderBy(p => p.Days)
+            .Select(p => new { p.Days, p.DisplayName, p.IsActive }).ToListAsync(ct));
 
     [HttpPost]
     public async Task<ActionResult<ApiResponse<PredictionResponse>>> Execute([FromBody] CreatePredictionRequest request, CancellationToken ct)

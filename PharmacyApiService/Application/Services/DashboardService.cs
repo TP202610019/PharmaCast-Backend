@@ -72,11 +72,12 @@ public class DashboardService : IDashboardService
         var mappingFields = await _db.MappingConfigurations
             .Where(mc => mc.Datasets.Any(d => d.Id == execution.DatasetId))
             .SelectMany(mc => mc.Fields)
-            .Where(f => f.MappingField != null && (f.MappingField.FieldKey == "product" || f.MappingField.FieldKey == "quantity"))
+            .Where(f => f.MappingField != null && (f.MappingField.FieldKey == "product_id" || f.MappingField.FieldKey == "product" || f.MappingField.FieldKey == "quantity"))
             .Select(f => new { f.MappingField!.FieldKey, f.DatasetColumnName })
             .ToListAsync(ct);
 
-        var salesProductCol  = mappingFields.FirstOrDefault(f => f.FieldKey == "product")?.DatasetColumnName;
+        var salesProductCol  = mappingFields.FirstOrDefault(f => f.FieldKey == "product_id")?.DatasetColumnName
+            ?? mappingFields.FirstOrDefault(f => f.FieldKey == "product")?.DatasetColumnName;
         var salesQuantityCol = mappingFields.FirstOrDefault(f => f.FieldKey == "quantity")?.DatasetColumnName;
 
         var summary = await BuildSummaryResponseAsync(execution.Id, execution.CreatedAt, execution.ForecastPeriod, execution.ExecutionStatus, ct);
@@ -90,12 +91,13 @@ public class DashboardService : IDashboardService
     {
         var wapeValue = await _db.PredictionMetrics
             .Where(m => m.PredictionExecutionId == predictionId
-                     && m.ProductName == null)
+                     && m.Method == MetricMethod.XGBoost && m.Scope == MetricScope.Overall)
             .Select(m => m.Wape)
             .FirstOrDefaultAsync(ct);
 
-        // Fixed demo value for the "Precisión Estimada"/"Precisión promedio" dashboard stat
-        var accuracy = wapeValue.HasValue ? 82.6 : 0.0;
+        var accuracy = wapeValue.HasValue
+            ? Math.Round(Math.Clamp(100.0 - wapeValue.Value, 0.0, 100.0), 1)
+            : 0.0;
 
         var productStats = await _db.ForecastResults
             .Where(f => f.PredictionExecutionId == predictionId)
@@ -109,7 +111,8 @@ public class DashboardService : IDashboardService
             .ToListAsync(ct);
 
         var productNames       = productStats.Select(p => p.Name).OrderBy(n => n).ToList();
-        var criticalCount      = productStats.Count(p => CalcPriority(p.Avg) == "critical");
+        var priorities         = BuildPriorityMap(productStats.Select(p => (p.Name, p.Total)));
+        var criticalCount      = priorities.Values.Count(priority => priority == "critical");
         var totalForecastedUnits = productStats.Sum(p => p.Total);
 
         return new DashboardSummaryResponse
@@ -135,12 +138,8 @@ public class DashboardService : IDashboardService
         if (!executionExists)
             throw new NotFoundException("PredictionExecution", predictionId);
 
-        var query = _db.ForecastResults.Where(f => f.PredictionExecutionId == predictionId);
-
-        if (!string.IsNullOrWhiteSpace(search))
-            query = query.Where(f => f.ProductName.ToLower().Contains(search.ToLower()));
-
-        var grouped = query
+        var productStats = await _db.ForecastResults
+            .Where(f => f.PredictionExecutionId == predictionId)
             .GroupBy(f => f.ProductName)
             .Select(g => new
             {
@@ -148,19 +147,24 @@ public class DashboardService : IDashboardService
                 TotalPredicted = g.Sum(f => f.PredictedQuantity),
                 AvgPredicted = g.Average(f => f.PredictedQuantity),
             })
-            .Where(g => g.TotalPredicted > 0);
+            .ToListAsync(ct);
 
-        var totalCount = await grouped.CountAsync(ct);
+        var priorities = BuildPriorityMap(productStats.Select(p => (p.ProductName, p.TotalPredicted)));
+        var filtered = productStats.Where(p => p.TotalPredicted > 0);
+        if (!string.IsNullOrWhiteSpace(search))
+            filtered = filtered.Where(p => p.ProductName.Contains(search, StringComparison.OrdinalIgnoreCase));
 
-        var rows = await grouped
+        var totalCount = filtered.Count();
+        var rows = filtered
             .OrderBy(r => r.ProductName)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .ToListAsync(ct);
+            .ToList();
 
         var productNames = rows.Select(r => r.ProductName).ToList();
         var historicalAvgMap = await _db.PredictionMetrics
             .Where(m => m.PredictionExecutionId == predictionId
+                     && m.Method == MetricMethod.XGBoost && m.Scope == MetricScope.Product
                      && m.ProductName != null
                      && productNames.Contains(m.ProductName)
                      && m.HistoricalAvg != null)
@@ -172,7 +176,7 @@ public class DashboardService : IDashboardService
             ProductName            = r.ProductName,
             TotalPredictedQuantity = Math.Round(r.TotalPredicted),
             AvgPredictedQuantity   = Math.Round(r.AvgPredicted, 1),
-            Priority               = CalcPriority(r.AvgPredicted),
+            Priority               = priorities.GetValueOrDefault(r.ProductName, "low"),
             HistoricalAvg          = historicalAvgMap.TryGetValue(r.ProductName, out var ha) ? ha : null,
         }).ToList();
 
@@ -209,27 +213,23 @@ public class DashboardService : IDashboardService
 
         var points = results.Select(r =>
         {
-            var conf = (int)Math.Round(r.PredictedQuantity * 0.11);
             return new DashboardChartPoint
             {
                 Date = r.ForecastDate.ToString("yyyy-MM-dd"),
-                Predicted = Math.Round(r.PredictedQuantity),
-                Upper = r.UpperBound.HasValue
-                    ? Math.Round(r.UpperBound.Value)
-                    : Math.Round(r.PredictedQuantity) + conf,
-                Lower = r.LowerBound.HasValue
-                    ? Math.Round(r.LowerBound.Value)
-                    : Math.Max(0, Math.Round(r.PredictedQuantity) - conf)
+                Predicted = r.PredictedQuantity,
+                Upper = r.UpperBound,
+                Lower = r.LowerBound
             };
         }).ToList();
 
         var historicalPoints = await _db.HistoricalDailyPoints
-            .Where(h => h.PredictionExecutionId == predictionId && h.ProductName == productName)
+            .Where(h => h.DatasetId == _db.PredictionExecutions.Where(e => e.Id == predictionId)
+                .Select(e => e.DatasetId).FirstOrDefault() && h.ProductName == productName)
             .OrderBy(h => h.Date)
             .Select(h => new DashboardHistoricalPoint
             {
                 Date = h.Date.ToString("yyyy-MM-dd"),
-                Quantity = Math.Round(h.Quantity, 1)
+                Quantity = h.Quantity
             })
             .ToListAsync(ct);
 
@@ -241,11 +241,24 @@ public class DashboardService : IDashboardService
         };
     }
 
-    private static string CalcPriority(double avgDailyQty) => avgDailyQty switch
+    private static Dictionary<string, string> BuildPriorityMap(IEnumerable<(string Name, double Total)> products)
     {
-        > 1.67 => "critical",
-        > 0.42 => "high",
-        > 0.08 => "medium",
-        _      => "low"
-    };
+        var ranked = products.Where(p => p.Total > 0)
+            .OrderByDescending(p => p.Total)
+            .ThenBy(p => p.Name, StringComparer.Ordinal)
+            .ToList();
+        var result = new Dictionary<string, string>();
+        for (var rank = 0; rank < ranked.Count; rank++)
+        {
+            var fraction = (double)rank / ranked.Count;
+            result[ranked[rank].Name] = fraction switch
+            {
+                < 0.15 => "critical",
+                < 0.40 => "high",
+                < 0.75 => "medium",
+                _ => "low"
+            };
+        }
+        return result;
+    }
 }

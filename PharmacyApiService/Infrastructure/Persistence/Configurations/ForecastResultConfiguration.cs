@@ -15,6 +15,7 @@ public class ForecastResultConfiguration : IEntityTypeConfiguration<ForecastResu
         builder.Property(x => x.PredictedQuantity).IsRequired();
 
         builder.HasIndex(x => x.PredictionExecutionId);
+        builder.HasIndex(x => new { x.PredictionExecutionId, x.ProductName, x.ForecastDate }).IsUnique();
         builder.HasIndex(x => new { x.PredictionExecutionId, x.ProductName });
         builder.HasIndex(x => new { x.PredictionExecutionId, x.ForecastDate });
     }
