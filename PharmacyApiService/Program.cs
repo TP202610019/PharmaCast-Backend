@@ -67,7 +67,7 @@ app.UseSwaggerUI(options =>
 });
 
 app.UseCors();
-if (!app.Environment.IsDevelopment())
+if (!app.Environment.IsDevelopment() && !app.Configuration.GetValue<bool>("ReverseProxy:TerminatesHttps"))
     app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
