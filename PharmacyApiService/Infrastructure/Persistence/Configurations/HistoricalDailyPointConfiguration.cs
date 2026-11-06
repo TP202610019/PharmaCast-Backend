@@ -8,20 +8,21 @@ public class HistoricalDailyPointConfiguration : IEntityTypeConfiguration<Histor
 {
     public void Configure(EntityTypeBuilder<HistoricalDailyPoint> builder)
     {
-        builder.ToTable("historical_daily_points");
+        builder.ToTable("historical_sales_daily");
         builder.HasKey(x => x.Id);
 
         builder.Property(x => x.Id).HasColumnName("id");
-        builder.Property(x => x.PredictionExecutionId).HasColumnName("prediction_execution_id").IsRequired();
+        builder.Property(x => x.DatasetId).HasColumnName("dataset_id").IsRequired();
         builder.Property(x => x.ProductName).HasColumnName("product_name").IsRequired();
         builder.Property(x => x.Date).HasColumnName("date").IsRequired();
         builder.Property(x => x.Quantity).HasColumnName("quantity").IsRequired();
 
-        builder.HasOne(x => x.PredictionExecution)
+        builder.HasOne(x => x.Dataset)
                .WithMany()
-               .HasForeignKey(x => x.PredictionExecutionId)
+               .HasForeignKey(x => x.DatasetId)
                .OnDelete(DeleteBehavior.Cascade);
 
-        builder.HasIndex(x => new { x.PredictionExecutionId, x.ProductName });
+        builder.HasIndex(x => new { x.DatasetId, x.ProductName, x.Date }).IsUnique();
+        builder.HasIndex(x => new { x.DatasetId, x.Date });
     }
 }

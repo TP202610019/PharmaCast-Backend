@@ -10,6 +10,7 @@ public static class ExternalServicesExtensions
     {
         services.Configure<MLSettings>(config.GetSection(MLSettings.SectionName));
         services.Configure<BlobStorageSettings>(config.GetSection(BlobStorageSettings.SectionName));
+        services.Configure<LocalStorageSettings>(config.GetSection(LocalStorageSettings.SectionName));
 
         var mlSettings = config.GetSection(MLSettings.SectionName).Get<MLSettings>()
             ?? throw new InvalidOperationException("MLService settings section not found.");
@@ -19,14 +20,22 @@ public static class ExternalServicesExtensions
         services.AddHttpClient<IMLServiceClient, MLServiceClient>(client =>
         {
             client.BaseAddress = new Uri(mlSettings.BaseUrl);
-            client.Timeout = TimeSpan.FromSeconds(660);
+            client.Timeout = TimeSpan.FromMinutes(5);
         });
 
-        var blobSettings = config.GetSection(BlobStorageSettings.SectionName).Get<BlobStorageSettings>();
-        if (string.IsNullOrWhiteSpace(blobSettings?.ConnectionString))
-            throw new InvalidOperationException("AzureBlob:ConnectionString is not configured.");
+        var localStorage = config.GetSection(LocalStorageSettings.SectionName).Get<LocalStorageSettings>();
+        if (localStorage?.Enabled == true)
+        {
+            services.AddScoped<IBlobStorageService, LocalStorageService>();
+        }
+        else
+        {
+            var blobSettings = config.GetSection(BlobStorageSettings.SectionName).Get<BlobStorageSettings>();
+            if (string.IsNullOrWhiteSpace(blobSettings?.ConnectionString))
+                throw new InvalidOperationException("AzureBlob:ConnectionString is not configured.");
 
-        services.AddScoped<IBlobStorageService, BlobStorageService>();
+            services.AddScoped<IBlobStorageService, BlobStorageService>();
+        }
 
         return services;
     }

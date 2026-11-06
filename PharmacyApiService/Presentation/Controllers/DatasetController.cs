@@ -29,7 +29,12 @@ public class DatasetController : ControllerBase
     {
         var userId = User.GetUserId();
         var result = await _service.UploadAsync(file, userId, mappingConfigId, ct);
-        return Created(string.Empty, ApiResponse<DatasetResponse>.Ok(result, "Dataset uploaded successfully."));
+        if (result.Error is not null)
+            return UnprocessableEntity(ApiResponse<DatasetResponse>.Fail(
+                ResponseCodes.ValidationError, result.Error,
+                new Dictionary<string, string[]> { ["file"] = [result.Error] }));
+
+        return Created(string.Empty, ApiResponse<DatasetResponse>.Ok(result.Dataset!, "Dataset uploaded successfully."));
     }
 
     [HttpGet]
@@ -54,6 +59,14 @@ public class DatasetController : ControllerBase
         var userId = User.GetUserId();
         var result = await _service.ValidateAsync(id, userId, ct);
         return Ok(ApiResponse<DatasetResponse>.Ok(result, "Dataset validated."));
+    }
+
+    [HttpPost("{id:guid}/confirm")]
+    public async Task<ActionResult<ApiResponse<DatasetResponse>>> Confirm(
+        Guid id, [FromBody] ConfirmDatasetRequest request, CancellationToken ct)
+    {
+        var result = await _service.ConfirmAsync(id, User.GetUserId(), request, ct);
+        return Ok(ApiResponse<DatasetResponse>.Ok(result, "Dataset confirmed."));
     }
 
     [HttpGet("{id:guid}/headers")]

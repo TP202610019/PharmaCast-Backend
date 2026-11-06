@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
+using System.Text.Json;
 using PharmacyApiService.Domain.Entities;
 
 namespace PharmacyApiService.Infrastructure.Persistence.Configurations;
@@ -16,6 +18,20 @@ public class PredictionExecutionConfiguration : IEntityTypeConfiguration<Predict
             .HasConversion<string>()
             .HasMaxLength(20);
         builder.Property(x => x.ErrorMessage).HasMaxLength(1000);
+        builder.Property(x => x.ArtifactPaths).HasColumnType("jsonb")
+            .HasConversion(v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                v => JsonSerializer.Deserialize<Dictionary<string, string>>(v, (JsonSerializerOptions?)null)!)
+            .Metadata.SetValueComparer(new ValueComparer<Dictionary<string, string>>(
+                (a, b) => JsonSerializer.Serialize(a, (JsonSerializerOptions?)null) == JsonSerializer.Serialize(b, (JsonSerializerOptions?)null),
+                v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null).GetHashCode(),
+                v => new Dictionary<string, string>(v)));
+        builder.Property(x => x.Warnings).HasColumnType("jsonb")
+            .HasConversion(v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                v => JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions?)null))
+            .Metadata.SetValueComparer(new ValueComparer<List<string>?>(
+                (a, b) => a == null ? b == null : b != null && a.SequenceEqual(b),
+                v => v == null ? 0 : v.Aggregate(0, (hash, item) => HashCode.Combine(hash, item.GetHashCode())),
+                v => v == null ? null : v.ToList()));
 
         builder.HasIndex(x => x.DatasetId);
         builder.HasIndex(x => x.ExecutedBy);

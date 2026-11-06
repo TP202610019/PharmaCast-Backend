@@ -19,6 +19,7 @@ public class MLServiceClient : IMLServiceClient
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new JsonStringEnumConverter(allowIntegerValues: false) },
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
@@ -52,8 +53,24 @@ public class MLServiceClient : IMLServiceClient
             _logger.LogError(
                 "ML Service returned {Status} for execution {Id}. Body: {Body}",
                 (int)response.StatusCode, request.PredictionExecutionId, body);
+
+            // FastAPI's HTTPException serializes as {"detail": "..."} — surface that
+            // real message instead of a generic "failed with status X", so it ends up
+            // in prediction_executions.error_message instead of getting lost in logs.
+            string? detail = null;
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                if (doc.RootElement.TryGetProperty("detail", out var detailProp))
+                    detail = detailProp.GetString();
+            }
+            catch (JsonException)
+            {
+                // Body wasn't JSON (e.g. a proxy/error page) — fall back to the generic message below.
+            }
+
             throw new ExternalServiceException("ML Service",
-                $"The prediction request failed with status {(int)response.StatusCode}.");
+                detail ?? $"The prediction request failed with status {(int)response.StatusCode}.");
         }
 
         var result = await response.Content.ReadFromJsonAsync<MLPredictionResponse>(JsonOptions, ct);
@@ -78,6 +95,15 @@ public class MLServiceClient : IMLServiceClient
             result.PredictionExecutionId, result.ProductMetrics.Count, result.Forecast.Count);
 
         return result;
+    }
+
+    public async Task<MLPredictionResponse> PrepareHistoryAsync(MLPredictionRequest request, CancellationToken ct = default)
+    {
+        using var response = await _http.PostAsJsonAsync("/api/predictions/prepare-history", request, JsonOptions, ct);
+        if (!response.IsSuccessStatusCode)
+            throw new ExternalServiceException("ML Service", "No se pudo preparar el histórico del dataset.");
+        return await response.Content.ReadFromJsonAsync<MLPredictionResponse>(JsonOptions, ct)
+            ?? throw new ExternalServiceException("ML Service", "El histórico recibido está vacío.");
     }
 
     public async Task<bool> IsHealthyAsync(CancellationToken ct = default)

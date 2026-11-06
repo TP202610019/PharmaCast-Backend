@@ -113,6 +113,48 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                     b.ToTable("datasets", (string)null);
                 });
 
+            modelBuilder.Entity("PharmacyApiService.Domain.Entities.ForecastHorizon", b =>
+                {
+                    b.Property<int>("Days")
+                        .HasColumnType("integer")
+                        .HasColumnName("days");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("display_name");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_active");
+
+                    b.HasKey("Days")
+                        .HasName("pk_forecast_horizons");
+
+                    b.ToTable("forecast_horizons", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            Days = 30,
+                            DisplayName = "30 días",
+                            IsActive = true
+                        },
+                        new
+                        {
+                            Days = 60,
+                            DisplayName = "60 días",
+                            IsActive = true
+                        },
+                        new
+                        {
+                            Days = 90,
+                            DisplayName = "90 días",
+                            IsActive = true
+                        });
+                });
+
             modelBuilder.Entity("PharmacyApiService.Domain.Entities.ForecastResult", b =>
                 {
                     b.Property<Guid>("Id")
@@ -127,6 +169,10 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("ForecastDate")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("forecast_date");
+
+                    b.Property<int?>("ForecastStep")
+                        .HasColumnType("integer")
+                        .HasColumnName("forecast_step");
 
                     b.Property<double?>("LowerBound")
                         .HasColumnType("double precision")
@@ -166,6 +212,10 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                     b.HasIndex("PredictionExecutionId", "ProductName")
                         .HasDatabaseName("ix_forecast_results_prediction_execution_id_product_name");
 
+                    b.HasIndex("PredictionExecutionId", "ProductName", "ForecastDate")
+                        .IsUnique()
+                        .HasDatabaseName("ix_forecast_results_prediction_execution_id_product_name_forec");
+
                     b.ToTable("forecast_results", (string)null);
                 });
 
@@ -176,13 +226,13 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<Guid>("DatasetId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("dataset_id");
+
                     b.Property<DateTime>("Date")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("date");
-
-                    b.Property<Guid>("PredictionExecutionId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("prediction_execution_id");
 
                     b.Property<string>("ProductName")
                         .IsRequired()
@@ -194,12 +244,16 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnName("quantity");
 
                     b.HasKey("Id")
-                        .HasName("pk_historical_daily_points");
+                        .HasName("pk_historical_sales_daily");
 
-                    b.HasIndex("PredictionExecutionId", "ProductName")
-                        .HasDatabaseName("ix_historical_daily_points_prediction_execution_id_product_name");
+                    b.HasIndex("DatasetId", "Date")
+                        .HasDatabaseName("ix_historical_sales_daily_dataset_id_date");
 
-                    b.ToTable("historical_daily_points", (string)null);
+                    b.HasIndex("DatasetId", "ProductName", "Date")
+                        .IsUnique()
+                        .HasDatabaseName("ix_historical_sales_daily_dataset_id_product_name_date");
+
+                    b.ToTable("historical_sales_daily", (string)null);
                 });
 
             modelBuilder.Entity("PharmacyApiService.Domain.Entities.MappingConfiguration", b =>
@@ -520,6 +574,11 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<string>("ArtifactPaths")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("artifact_paths");
+
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("completed_at");
@@ -537,6 +596,14 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(1000)")
                         .HasColumnName("error_message");
 
+                    b.Property<DateTime?>("EvaluationPeriodEnd")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("evaluation_period_end");
+
+                    b.Property<DateTime?>("EvaluationPeriodStart")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("evaluation_period_start");
+
                     b.Property<Guid>("ExecutedBy")
                         .HasColumnType("uuid")
                         .HasColumnName("executed_by");
@@ -551,13 +618,37 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("forecast_period");
 
+                    b.Property<bool>("IsRetrain")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_retrain");
+
+                    b.Property<int?>("NewProductsCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("new_products_count");
+
+                    b.Property<double?>("NewProductsUnits")
+                        .HasColumnType("double precision")
+                        .HasColumnName("new_products_units");
+
                     b.Property<DateTime?>("StartedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("started_at");
 
+                    b.Property<DateTime?>("TrainingPeriodEnd")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("training_period_end");
+
+                    b.Property<DateTime?>("TrainingPeriodStart")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("training_period_start");
+
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
+
+                    b.Property<string>("Warnings")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("warnings");
 
                     b.HasKey("Id")
                         .HasName("pk_prediction_executions");
@@ -590,6 +681,14 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<double?>("AbsoluteTotalError")
+                        .HasColumnType("double precision")
+                        .HasColumnName("absolute_total_error");
+
+                    b.Property<double?>("ActualTotal")
+                        .HasColumnType("double precision")
+                        .HasColumnName("actual_total");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
@@ -605,6 +704,20 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                     b.Property<double?>("Mape")
                         .HasColumnType("double precision")
                         .HasColumnName("mape");
+
+                    b.Property<double?>("Mbe")
+                        .HasColumnType("double precision")
+                        .HasColumnName("mbe");
+
+                    b.Property<string>("Method")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("method");
+
+                    b.Property<double?>("PredictedTotal")
+                        .HasColumnType("double precision")
+                        .HasColumnName("predicted_total");
 
                     b.Property<Guid>("PredictionExecutionId")
                         .HasColumnType("uuid")
@@ -623,6 +736,16 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("rows");
 
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("scope");
+
+                    b.Property<double?>("TotalErrorPercentage")
+                        .HasColumnType("double precision")
+                        .HasColumnName("total_error_percentage");
+
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
@@ -637,7 +760,20 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                     b.HasIndex("PredictionExecutionId")
                         .HasDatabaseName("ix_prediction_metrics_prediction_execution_id");
 
-                    b.ToTable("prediction_metrics", (string)null);
+                    b.HasIndex("PredictionExecutionId", "Method", "Scope")
+                        .IsUnique()
+                        .HasDatabaseName("ix_prediction_metrics_prediction_execution_id_method_scope")
+                        .HasFilter("product_name IS NULL");
+
+                    b.HasIndex("PredictionExecutionId", "Method", "Scope", "ProductName")
+                        .IsUnique()
+                        .HasDatabaseName("ix_prediction_metrics_prediction_execution_id_method_scope_pro")
+                        .HasFilter("product_name IS NOT NULL");
+
+                    b.ToTable("prediction_metrics", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_prediction_metrics_scope_product", "(scope = 'Overall' AND product_name IS NULL) OR (scope = 'Product' AND product_name IS NOT NULL)");
+                        });
                 });
 
             modelBuilder.Entity("PharmacyApiService.Domain.Entities.PurchasePlan", b =>
@@ -901,14 +1037,14 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("PharmacyApiService.Domain.Entities.HistoricalDailyPoint", b =>
                 {
-                    b.HasOne("PharmacyApiService.Domain.Entities.PredictionExecution", "PredictionExecution")
+                    b.HasOne("PharmacyApiService.Domain.Entities.Dataset", "Dataset")
                         .WithMany()
-                        .HasForeignKey("PredictionExecutionId")
+                        .HasForeignKey("DatasetId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
-                        .HasConstraintName("fk_historical_daily_points_prediction_executions_prediction_ex");
+                        .HasConstraintName("fk_historical_sales_daily_datasets_dataset_id");
 
-                    b.Navigation("PredictionExecution");
+                    b.Navigation("Dataset");
                 });
 
             modelBuilder.Entity("PharmacyApiService.Domain.Entities.MappingConfiguration", b =>

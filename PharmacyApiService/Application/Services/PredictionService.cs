@@ -1,3 +1,6 @@
+using Microsoft.EntityFrameworkCore;
+using PharmacyApiService.Infrastructure.Persistence;
+using PharmacyApiService.Presentation.DTOs.Dataset;
 using PharmacyApiService.Application.Interfaces;
 using PharmacyApiService.Application.Interfaces.Repositories;
 using PharmacyApiService.Application.Interfaces.Services;
@@ -13,6 +16,8 @@ namespace PharmacyApiService.Application.Services;
 public class PredictionService : IPredictionService
 {
     private readonly IPredictionRepository _predictions;
+    private readonly ApplicationDbContext _db;
+    private readonly IDatasetService _datasetService;
     private readonly IDatasetRepository _datasets;
     private readonly IMappingConfigRepository _mappings;
     private readonly IMLServiceClient _mlClient;
@@ -21,6 +26,8 @@ public class PredictionService : IPredictionService
 
     public PredictionService(
         IPredictionRepository predictions,
+        ApplicationDbContext db,
+        IDatasetService datasetService,
         IDatasetRepository datasets,
         IMappingConfigRepository mappings,
         IMLServiceClient mlClient,
@@ -28,6 +35,8 @@ public class PredictionService : IPredictionService
         ILogger<PredictionService> logger)
     {
         _predictions = predictions;
+        _db = db;
+        _datasetService = datasetService;
         _datasets = datasets;
         _mappings = mappings;
         _mlClient = mlClient;
@@ -57,10 +66,9 @@ public class PredictionService : IPredictionService
         if (dataset.UploadedBy != userId)
             throw new ForbiddenException();
 
-        if (dataset.UploadStatus != UploadStatus.Completed || dataset.DatasetStage != DatasetStage.Raw)
-            throw new ValidationException("dataset",
-                $"El dataset debe estar completamente validado (stage=Raw, status=Completed) antes de ejecutar una predicción. " +
-                $"Estado actual: stage={dataset.DatasetStage}, status={dataset.UploadStatus}.");
+        if (!await _db.ForecastHorizons.AsNoTracking()
+            .AnyAsync(p => p.Days == request.ForecastPeriod && p.IsActive, ct))
+            throw new ValidationException("forecastPeriod", "Selecciona un período de pronóstico activo del catálogo.");
 
         // ── 2. Resolve mapping configuration ─────────────────────────────────
         _logger.LogInformation(
@@ -69,7 +77,8 @@ public class PredictionService : IPredictionService
 
         MappingConfiguration? mapping = null;
         if (request.MappingConfigurationId.HasValue)
-            mapping = await _mappings.GetByIdWithFieldsAsync(request.MappingConfigurationId.Value, ct);
+            mapping = await _mappings.GetByIdWithFieldsAsync(request.MappingConfigurationId.Value, ct)
+                ?? throw new NotFoundException(nameof(MappingConfiguration), request.MappingConfigurationId.Value);
         if (mapping is null && dataset.MappingConfigurationId.HasValue)
             mapping = await _mappings.GetByIdWithFieldsAsync(dataset.MappingConfigurationId.Value, ct);
         if (mapping is null)
@@ -84,6 +93,13 @@ public class PredictionService : IPredictionService
                 "No se encontró una configuración de mapeo de columnas. " +
                 "Por favor, define el mapeo de columnas antes de ejecutar la predicción.");
 
+        if (mapping.UserId != userId) throw new ForbiddenException();
+        // Compatibility: prediction confirms using the same sales validation as the explicit endpoint.
+        await _datasetService.ConfirmAsync(dataset.Id, userId,
+            new ConfirmDatasetRequest { MappingConfigurationId = mapping.Id }, ct);
+        dataset = await _datasets.GetByIdAsync(dataset.Id, ct)
+            ?? throw new NotFoundException(nameof(Dataset), request.DatasetId);
+
         _logger.LogInformation(
             "[PREDICT-2] Mapping resolved — id={MappingId}, fields={Fields}",
             mapping.Id,
@@ -94,6 +110,7 @@ public class PredictionService : IPredictionService
         // at the end — that query generates a Cartesian JOIN over 20k+ forecast rows.
         List<ForecastResultResponse> forecastForResponse = [];
         List<PredictionMetricResponse> metricsForResponse = [];
+        bool isDemo = false;
 
         var execution = new PredictionExecution
         {
@@ -110,6 +127,7 @@ public class PredictionService : IPredictionService
         _logger.LogInformation("[PREDICT-3] Execution record created — executionId={ExecutionId}", execution.Id);
 
         // ── 4. Resolve dataset path and call ML Service ───────────────────────
+        using var processingBudget = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         try
         {
             var container = dataset.BlobContainer ?? AppConstants.Blob.RawDatasetContainer;
@@ -135,15 +153,26 @@ public class PredictionService : IPredictionService
             };
 
             _logger.LogInformation(
-                "[PREDICT-5] Calling ML Service — executionId={Id}, datasetId={DatasetId}, path={Path}, " +
+                "[PREDICT-5] Calling ML Service — executionId={Id}, datasetId={DatasetId}, " +
                 "period={Period}, fields={Fields}",
-                mlRequest.PredictionExecutionId, mlRequest.DatasetId, mlRequest.DatasetPath,
+                mlRequest.PredictionExecutionId, mlRequest.DatasetId,
                 mlRequest.ForecastPeriod,
                 string.Join(", ", fieldDict.Select(kv => $"{kv.Key}='{kv.Value}'")));
 
-            // Use CancellationToken.None so the ML processing completes even if the
-            // HTTP client disconnects mid-flight (ML takes 1-3 minutes for large datasets).
-            var mlResponse = await _mlClient.PredictAsync(mlRequest, CancellationToken.None);
+            // One shared five-minute budget covers ML and persistence.
+            // Client disconnects do not cancel the execution independently.
+            var mlResponse = await _mlClient.PredictAsync(mlRequest, processingBudget.Token);
+            await SaveHistoryAsync(dataset.Id, mlResponse.HistoricalPoints, processingBudget.Token);
+            isDemo = mlResponse.IsDemo;
+            execution.IsRetrain = mlResponse.IsRetrain;
+            execution.ArtifactPaths = mlResponse.ArtifactPaths;
+            execution.Warnings = mlResponse.Warnings;
+            execution.TrainingPeriodStart = mlResponse.TrainingPeriodStart;
+            execution.TrainingPeriodEnd = mlResponse.TrainingPeriodEnd;
+            execution.EvaluationPeriodStart = mlResponse.EvaluationPeriodStart;
+            execution.EvaluationPeriodEnd = mlResponse.EvaluationPeriodEnd;
+            execution.NewProductsCount = mlResponse.NewProductsCount;
+            execution.NewProductsUnits = mlResponse.NewProductsUnits;
 
             _logger.LogInformation(
                 "[PREDICT-5] ML Service responded — status={Status}, forecastEntries={ForecastCount}, productMetrics={ProductCount}",
@@ -151,7 +180,6 @@ public class PredictionService : IPredictionService
 
             // ── 5a. Persist forecast results ──────────────────────────────────
             var forecastResults = mlResponse.Forecast
-                .Where(f => DateTime.TryParse(f.Date, out _))
                 .Select(f =>
                 {
                     var rawDate = DateTime.Parse(f.Date, null, System.Globalization.DateTimeStyles.RoundtripKind);
@@ -169,15 +197,20 @@ public class PredictionService : IPredictionService
                         PredictionExecutionId = execution.Id,
                         ProductName           = f.ProductId,
                         ForecastDate          = utcDate,
+                        ForecastStep          = f.ForecastStep,
                         PredictedQuantity     = f.PredictedQuantity,
                         LowerBound            = null,
                         UpperBound            = null
                     };
-                });
+                }).ToList();
 
             // ── 5b. Persist metrics ───────────────────────────────────────────
             var allMetrics = new[] { BuildOverallMetric(execution.Id, mlResponse.Metrics) }
-                .Concat(mlResponse.ProductMetrics.Select(pm => BuildProductMetric(execution.Id, pm)));
+                .Concat(mlResponse.ProductMetrics.Select(pm => BuildProductMetric(execution.Id, pm)))
+                .Concat(mlResponse.BaselineMetrics is null ? Array.Empty<PredictionMetric>()
+                    : new[] { BuildOverallMetric(execution.Id, mlResponse.BaselineMetrics, MetricMethod.NaiveWeekly) })
+                .Concat(mlResponse.BaselineProductMetrics.Select(pm =>
+                    BuildProductMetric(execution.Id, pm, MetricMethod.NaiveWeekly)));
 
             // Build response DTOs from in-memory data before saving to DB
             forecastForResponse = forecastResults
@@ -185,6 +218,7 @@ public class PredictionService : IPredictionService
                 {
                     ProductName       = f.ProductName,
                     ForecastDate      = f.ForecastDate,
+                    ForecastStep      = f.ForecastStep,
                     PredictedQuantity = f.PredictedQuantity,
                     LowerBound        = f.LowerBound,
                     UpperBound        = f.UpperBound,
@@ -195,6 +229,13 @@ public class PredictionService : IPredictionService
                 .Select(m => new PredictionMetricResponse
                 {
                     ProductName   = m.ProductName,
+                    Method        = m.Method,
+                    Scope         = m.Scope,
+                    Mbe           = m.Mbe,
+                    ActualTotal = m.ActualTotal,
+                    PredictedTotal = m.PredictedTotal,
+                    AbsoluteTotalError = m.AbsoluteTotalError,
+                    TotalErrorPercentage = m.TotalErrorPercentage,
                     Wape          = m.Wape,
                     Rmse          = m.Rmse,
                     Mae           = m.Mae,
@@ -204,36 +245,15 @@ public class PredictionService : IPredictionService
                 }).ToList();
 
             _logger.LogInformation("[PREDICT-6] Persisting forecast results and metrics to DB...");
-            await _predictions.AddForecastResultsAsync(forecastResults, CancellationToken.None);
-            await _predictions.AddMetricsAsync(allMetricsList, CancellationToken.None);
+            var forecastList = forecastResults.ToList();
 
             execution.ExecutionStatus = ExecutionStatus.Completed;
             execution.CompletedAt = DateTime.UtcNow;
             _logger.LogInformation("[PREDICT-6] Forecast and metrics saved ({F} rows, {M} rows).",
                 forecastForResponse.Count, metricsForResponse.Count);
 
-            // ── 5c. Persist historical daily points ───────────────────────────
-            if (mlResponse.HistoricalPoints.Count > 0)
-            {
-                var historicalPoints = mlResponse.HistoricalPoints
-                    .Where(h => DateTime.TryParse(h.Date, out _))
-                    .Select(h =>
-                    {
-                        var rawDate = DateTime.Parse(h.Date, null, System.Globalization.DateTimeStyles.RoundtripKind);
-                        var utcDate = rawDate.Kind == DateTimeKind.Utc
-                            ? rawDate
-                            : DateTime.SpecifyKind(rawDate, DateTimeKind.Utc);
-                        return new HistoricalDailyPoint
-                        {
-                            PredictionExecutionId = execution.Id,
-                            ProductName = h.ProductId,
-                            Date = utcDate,
-                            Quantity = h.Quantity
-                        };
-                    });
-                await _predictions.AddHistoricalPointsAsync(historicalPoints, CancellationToken.None);
-                _logger.LogInformation("[PREDICT-6] Historical daily points saved ({Count} rows).", mlResponse.HistoricalPoints.Count);
-            }
+            await _predictions.SaveResultsAsync(execution, forecastList, allMetricsList,
+                processingBudget.Token);
         }
         catch (OperationCanceledException)
         {
@@ -263,9 +283,18 @@ public class PredictionService : IPredictionService
         _logger.LogInformation(
             "[PREDICT-7] Saving final execution state — status={Status}...", execution.ExecutionStatus);
 
-        execution.UpdatedAt = DateTime.UtcNow;
-        _predictions.Update(execution);
-        await _predictions.SaveChangesAsync(CancellationToken.None);
+        if (execution.ExecutionStatus == ExecutionStatus.Failed)
+        {
+            forecastForResponse.Clear();
+            metricsForResponse.Clear();
+            execution.TrainingPeriodStart = execution.TrainingPeriodEnd = null;
+            execution.EvaluationPeriodStart = execution.EvaluationPeriodEnd = null;
+            execution.NewProductsCount = null;
+            execution.NewProductsUnits = null;
+            execution.UpdatedAt = DateTime.UtcNow;
+            _predictions.Update(execution);
+            await _predictions.SaveChangesAsync(CancellationToken.None);
+        }
 
         _logger.LogInformation(
             "[PREDICT-8] Response ready — executionId={Id}, status={Status}, forecastRows={FRows}, metrics={MRows}",
@@ -280,9 +309,20 @@ public class PredictionService : IPredictionService
             StartedAt          = execution.StartedAt,
             CompletedAt        = execution.CompletedAt,
             ErrorMessage       = execution.ErrorMessage,
+            IsDemo             = isDemo,
+            IsRetrain = execution.IsRetrain,
+            ArtifactPaths = execution.ArtifactPaths,
+            Warnings = execution.Warnings,
             CreatedAt          = execution.CreatedAt,
             ForecastResults    = forecastForResponse,
-            Metrics            = metricsForResponse,
+            Metrics            = metricsForResponse.Where(m => m.Method == MetricMethod.XGBoost).ToList(),
+            ProductMetrics = metricsForResponse.Where(m => m.Method == MetricMethod.XGBoost && m.Scope == MetricScope.Product).ToList(),
+            BaselineMetrics = metricsForResponse.Where(m => m.Method == MetricMethod.NaiveWeekly).ToList(),
+            BaselineProductMetrics = metricsForResponse.Where(m => m.Method == MetricMethod.NaiveWeekly && m.Scope == MetricScope.Product).ToList(),
+            TrainingPeriodStart = execution.TrainingPeriodStart,
+            TrainingPeriodEnd = execution.TrainingPeriodEnd,
+            EvaluationPeriodStart = execution.EvaluationPeriodStart,
+            EvaluationPeriodEnd = execution.EvaluationPeriodEnd,
         };
     }
 
@@ -312,22 +352,81 @@ public class PredictionService : IPredictionService
         }).ToList();
     }
 
+    private async Task SaveHistoryAsync(Guid datasetId, List<MLHistoricalEntry> points, CancellationToken ct)
+    {
+        if (points.Count == 0) throw new InvalidOperationException("El dataset no contiene ventas válidas.");
+        var rows = points.Select(p => new HistoricalDailyPoint
+        {
+            DatasetId = datasetId, ProductName = p.ProductId,
+            Date = DateTime.SpecifyKind(DateTime.ParseExact(p.Date, "yyyy-MM-dd",
+                System.Globalization.CultureInfo.InvariantCulture), DateTimeKind.Utc),
+            Quantity = p.Quantity
+        }).ToList();
+        if (rows.Any(r => string.IsNullOrWhiteSpace(r.ProductName) || !double.IsFinite(r.Quantity)) ||
+            rows.Select(r => (r.ProductName, r.Date)).Distinct().Count() != rows.Count)
+            throw new InvalidOperationException("El histórico diario recibido es inválido.");
+        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            // Serialize preparation for the same dataset across backend instances.
+            await _db.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT pg_advisory_xact_lock(hashtextextended({datasetId.ToString()}, 0))", ct);
+            // Zero-demand days are reconstructed for charts. Compare only persisted sales
+            // rows so older dense snapshots remain compatible with the sparse format.
+            var existing = await _db.HistoricalDailyPoints.AsNoTracking()
+                .Where(h => h.DatasetId == datasetId && h.Quantity != 0).ToListAsync(ct);
+            if (existing.Count > 0)
+            {
+                var expected = rows.ToDictionary(r => (r.ProductName, r.Date), r => r.Quantity);
+                if (existing.Count != rows.Count || existing.Any(r =>
+                    !expected.TryGetValue((r.ProductName, r.Date), out var quantity) || quantity != r.Quantity))
+                    throw new InvalidOperationException("El histórico del dataset cambió. Carga un nuevo dataset.");
+            }
+            else
+            {
+                await SalesBulkWriter.HistoryAsync(_db, rows, ct);
+            }
+            await transaction.CommitAsync(ct);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            _db.ChangeTracker.Clear();
+            throw;
+        }
+    }
+
     // ── Metric helpers ────────────────────────────────────────────────────────
 
-    private static PredictionMetric BuildOverallMetric(Guid executionId, MLExecutionMetrics m) => new()
+    private static PredictionMetric BuildOverallMetric(Guid executionId, MLExecutionMetrics m, MetricMethod method = MetricMethod.XGBoost) => new()
     {
         PredictionExecutionId = executionId,
         ProductName = null,
+        Method = method,
+        Scope = MetricScope.Overall,
+        Rows = m.Rows,
+        Mbe = m.Mbe,
+        ActualTotal = m.ActualTotal,
+        PredictedTotal = m.PredictedTotal,
+        AbsoluteTotalError = m.AbsoluteTotalError,
+        TotalErrorPercentage = m.TotalErrorPercentage,
         Wape = m.Wape,
         Rmse = m.Rmse,
         Mae  = m.Mae,
         Mape = m.Mape,
     };
 
-    private static PredictionMetric BuildProductMetric(Guid executionId, MLProductMetric pm) => new()
+    private static PredictionMetric BuildProductMetric(Guid executionId, MLProductMetric pm, MetricMethod method = MetricMethod.XGBoost) => new()
     {
         PredictionExecutionId = executionId,
         ProductName   = pm.ProductId,
+        Method = method,
+        Scope = MetricScope.Product,
+        Mbe = pm.Mbe,
+        ActualTotal = pm.ActualTotal,
+        PredictedTotal = pm.PredictedTotal,
+        AbsoluteTotalError = pm.AbsoluteTotalError,
+        TotalErrorPercentage = pm.TotalErrorPercentage,
         Wape          = pm.Wape,
         Rmse          = pm.Rmse,
         Mae           = pm.Mae,
@@ -346,25 +445,45 @@ public class PredictionService : IPredictionService
         ExecutionStatus = e.ExecutionStatus,
         StartedAt       = e.StartedAt,
         CompletedAt     = e.CompletedAt,
+        TrainingPeriodStart = e.TrainingPeriodStart,
+        TrainingPeriodEnd = e.TrainingPeriodEnd,
+        EvaluationPeriodStart = e.EvaluationPeriodStart,
+        EvaluationPeriodEnd = e.EvaluationPeriodEnd,
         ErrorMessage    = e.ErrorMessage,
+        IsRetrain = e.IsRetrain,
+        ArtifactPaths = e.ArtifactPaths,
+        Warnings = e.Warnings,
         CreatedAt       = e.CreatedAt,
         ForecastResults = e.ForecastResults.Select(f => new ForecastResultResponse
         {
             ProductName       = f.ProductName,
             ForecastDate      = f.ForecastDate,
+            ForecastStep      = f.ForecastStep,
             PredictedQuantity = f.PredictedQuantity,
             LowerBound        = f.LowerBound,
             UpperBound        = f.UpperBound
         }).ToList(),
-        Metrics = e.PredictionMetrics.Select(m => new PredictionMetricResponse
-        {
-            ProductName   = m.ProductName,
-            Wape          = m.Wape,
-            Rmse          = m.Rmse,
-            Mae           = m.Mae,
-            Mape          = m.Mape,
-            Rows          = m.Rows,
-            HistoricalAvg = m.HistoricalAvg,
-        }).ToList()
+        Metrics = e.PredictionMetrics.Where(m => m.Method == MetricMethod.XGBoost).Select(MapMetric).ToList(),
+        ProductMetrics = e.PredictionMetrics.Where(m => m.Method == MetricMethod.XGBoost && m.Scope == MetricScope.Product).Select(MapMetric).ToList(),
+        BaselineMetrics = e.PredictionMetrics.Where(m => m.Method == MetricMethod.NaiveWeekly).Select(MapMetric).ToList(),
+        BaselineProductMetrics = e.PredictionMetrics.Where(m => m.Method == MetricMethod.NaiveWeekly && m.Scope == MetricScope.Product).Select(MapMetric).ToList()
+    };
+
+    private static PredictionMetricResponse MapMetric(PredictionMetric m) => new()
+    {
+        Method = m.Method,
+        Scope = m.Scope,
+        ProductName = m.ProductName,
+        Wape = m.Wape,
+        Mae = m.Mae,
+        Rmse = m.Rmse,
+        Mbe = m.Mbe,
+        ActualTotal = m.ActualTotal,
+        PredictedTotal = m.PredictedTotal,
+        AbsoluteTotalError = m.AbsoluteTotalError,
+        TotalErrorPercentage = m.TotalErrorPercentage,
+        Mape = m.Mape,
+        Rows = m.Rows,
+        HistoricalAvg = m.HistoricalAvg
     };
 }

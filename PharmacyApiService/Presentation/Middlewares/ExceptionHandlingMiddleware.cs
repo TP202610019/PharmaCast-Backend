@@ -58,7 +58,7 @@ public class ExceptionHandlingMiddleware
     {
         if (exception is AppException appEx)
         {
-            _logger.LogWarning(exception, "Handled exception [{Code}] - {Message}", appEx.Code, appEx.Message);
+            _logger.LogWarning("Handled exception [{Code}] - {Message}", appEx.Code, appEx.Message);
             return (
                 (int)appEx.StatusCode,
                 ApiResponse<object>.Fail(appEx.Code, appEx.Message, appEx.Errors)

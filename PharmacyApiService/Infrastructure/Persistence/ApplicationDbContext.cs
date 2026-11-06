@@ -31,6 +31,7 @@ public class ApplicationDbContext : DbContext
     public DbSet<PredictionExecution> PredictionExecutions => Set<PredictionExecution>();
     public DbSet<ForecastResult> ForecastResults => Set<ForecastResult>();
     public DbSet<PredictionMetric> PredictionMetrics => Set<PredictionMetric>();
+    public DbSet<ForecastHorizon> ForecastHorizons => Set<ForecastHorizon>();
     public DbSet<PurchasePlan> PurchasePlans => Set<PurchasePlan>();
     public DbSet<PurchasePlanItem> PurchasePlanItems => Set<PurchasePlanItem>();
     public DbSet<PlanEvaluation> PlanEvaluations => Set<PlanEvaluation>();

@@ -13,8 +13,18 @@ public class MLPredictionResponse
     public string Status { get; set; } = string.Empty;
 
     public bool IsRetrain { get; set; }
+    public List<string>? Warnings { get; set; }
+    public bool IsDemo { get; set; }
     public string? StartedAt { get; set; }
     public string? CompletedAt { get; set; }
+    public DateTime? TrainingPeriodStart { get; set; }
+    public DateTime? TrainingPeriodEnd { get; set; }
+    public DateTime? EvaluationPeriodStart { get; set; }
+    public DateTime? EvaluationPeriodEnd { get; set; }
+    public int? NewProductsCount { get; set; }
+    public double? NewProductsUnits { get; set; }
+    public MLExecutionMetrics? BaselineMetrics { get; set; }
+    public List<MLProductMetric> BaselineProductMetrics { get; set; } = [];
 
     /// <summary>Aggregate evaluation metrics over all products.</summary>
     public MLExecutionMetrics Metrics { get; set; } = new();
@@ -37,18 +47,31 @@ public class MLPredictionResponse
 
 public class MLExecutionMetrics
 {
+    public int Rows { get; set; }
+    public double? ActualTotal { get; set; }
+    public double? PredictedTotal { get; set; }
+    public double? AbsoluteTotalError { get; set; }
+    public double? TotalErrorPercentage { get; set; }
+    public double? VolumeAccuracy => TotalErrorPercentage.HasValue ? 100 - TotalErrorPercentage.Value : null;
     public double? Wape { get; set; }
-    public double? Rmse { get; set; }
     public double? Mae { get; set; }
+    public double? Rmse { get; set; }
+    public double? Mbe { get; set; }
     public double? Mape { get; set; }
 }
 
 public class MLProductMetric
 {
     public string ProductId { get; set; } = string.Empty;
+    public double? ActualTotal { get; set; }
+    public double? PredictedTotal { get; set; }
+    public double? AbsoluteTotalError { get; set; }
+    public double? TotalErrorPercentage { get; set; }
+    public double? VolumeAccuracy => TotalErrorPercentage.HasValue ? 100 - TotalErrorPercentage.Value : null;
     public double? Wape { get; set; }
-    public double? Rmse { get; set; }
     public double? Mae { get; set; }
+    public double? Rmse { get; set; }
+    public double? Mbe { get; set; }
     public double? Mape { get; set; }
     public int Rows { get; set; }
     public double? HistoricalAvg { get; set; }
