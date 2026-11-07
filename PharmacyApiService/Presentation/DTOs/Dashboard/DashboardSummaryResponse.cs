@@ -8,7 +8,7 @@ public class DashboardSummaryResponse
     public DateTime? LatestPredictionDate { get; set; }
     public int? ForecastPeriod { get; set; }
     public ExecutionStatus? LatestStatus { get; set; }
-    public double Accuracy { get; set; }
+    public double? Accuracy { get; set; }
     public int TotalProducts { get; set; }
     public int CriticalCount { get; set; }
     public double TotalForecastedUnits { get; set; }

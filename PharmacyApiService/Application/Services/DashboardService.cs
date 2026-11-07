@@ -38,14 +38,14 @@ public class DashboardService : IDashboardService
 
         // One aggregate metric per completed execution; product rows and failed runs
         // must not bias the user's overall accuracy.
-        var aggregateWapes = await _db.PredictionMetrics
-            .Where(m => m.ProductName == null && m.Wape.HasValue
+        var errors = await _db.PredictionMetrics
+            .Where(m => m.Method == MetricMethod.XGBoost && m.Scope == MetricScope.Overall && m.TotalErrorPercentage.HasValue
                 && m.PredictionExecution.ExecutedBy == userId
                 && m.PredictionExecution.ExecutionStatus == ExecutionStatus.Completed)
-            .Select(m => m.Wape!.Value)
+            .Select(m => m.TotalErrorPercentage!.Value)
             .ToListAsync(ct);
-        double? averageAccuracy = aggregateWapes.Count == 0 ? null
-            : Math.Round(aggregateWapes.Average(wape => Math.Max(0.0, 100.0 - wape)), 1);
+        double? averageAccuracy = errors.Count == 0 ? null
+            : Math.Round(errors.Average(error => 100.0 - error), 1);
 
         return new DashboardMetricsResponse
         {
@@ -101,15 +101,15 @@ public class DashboardService : IDashboardService
     private async Task<DashboardSummaryResponse> BuildSummaryResponseAsync(
         Guid predictionId, DateTime createdAt, int forecastPeriod, ExecutionStatus status, CancellationToken ct)
     {
-        var wapeValue = await _db.PredictionMetrics
+        var totalErrorPercentage = await _db.PredictionMetrics
             .Where(m => m.PredictionExecutionId == predictionId
                      && m.Method == MetricMethod.XGBoost && m.Scope == MetricScope.Overall)
-            .Select(m => m.Wape)
+            .Select(m => m.TotalErrorPercentage)
             .FirstOrDefaultAsync(ct);
 
-        var accuracy = wapeValue.HasValue
-            ? Math.Round(Math.Clamp(100.0 - wapeValue.Value, 0.0, 100.0), 1)
-            : 0.0;
+        double? accuracy = totalErrorPercentage.HasValue
+            ? Math.Round(100.0 - totalErrorPercentage.Value, 1)
+            : null;
 
         var productStats = await _db.ForecastResults
             .Where(f => f.PredictionExecutionId == predictionId)
