@@ -1,4 +1,6 @@
 using Microsoft.OpenApi.Models;
+using Microsoft.AspNetCore.ResponseCompression;
+using System.IO.Compression;
 using PharmacyApiService.Infrastructure.Extensions;
 using PharmacyApiService.Infrastructure.Persistence;
 using PharmacyApiService.Presentation.Filters;
@@ -55,9 +57,24 @@ builder.Services.AddCors(options =>
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddFluentValidation();
 builder.Services.AddMemoryCache();
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.Providers.Add<GzipCompressionProvider>();
+    options.MimeTypes = ["application/json"];
+});
+builder.Services.Configure<GzipCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
 builder.Services.AddHttpClient("RecoveryEmail", client => client.Timeout = TimeSpan.FromSeconds(10));
 
 var app = builder.Build();
+
+// Completed analysis responses can contain thousands of daily forecast rows.
+// Compress read-only analysis endpoints, keeping authentication responses separate.
+app.UseWhen(context => HttpMethods.IsGet(context.Request.Method) &&
+    (context.Request.Path.StartsWithSegments("/api/dashboard") ||
+     context.Request.Path.StartsWithSegments("/api/predictions") ||
+     context.Request.Path.StartsWithSegments("/api/purchase-plans")),
+    branch => branch.UseResponseCompression());
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
