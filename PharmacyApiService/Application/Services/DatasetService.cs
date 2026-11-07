@@ -388,7 +388,13 @@ public class DatasetService : IDatasetService
         };
 
         var result = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-        using var excelReader = ExcelReaderFactory.CreateReader(stream, config);
+        // Excel readers require seeking, which downloaded blob streams may not support.
+        using var seekableCopy = new MemoryStream();
+        if (!stream.CanSeek)
+            stream.CopyTo(seekableCopy);
+        seekableCopy.Position = 0;
+        using var excelReader = ExcelReaderFactory.CreateReader(
+            stream.CanSeek ? stream : seekableCopy, config);
 
         do
         {
@@ -460,17 +466,7 @@ public class DatasetService : IDatasetService
     {
         using var reader = new StreamReader(stream, leaveOpen: true);
 
-        // Skip blank rows before the first content row
-        string? firstLine = null;
-        while (!reader.EndOfStream)
-        {
-            var line = reader.ReadLine();
-            if (!string.IsNullOrWhiteSpace(line))
-            {
-                firstLine = line;
-                break;
-            }
-        }
+        var firstLine = reader.ReadLine();
 
         if (firstLine is null)
             throw new ValidationException("file", "El archivo CSV no contiene encabezados.");
@@ -553,40 +549,22 @@ public class DatasetService : IDatasetService
             LeaveOpen = false,
         };
 
-        using var excelReader = ExcelReaderFactory.CreateReader(stream, config);
+        // Excel readers require seeking, which downloaded blob streams may not support.
+        using var seekableCopy = new MemoryStream();
+        if (!stream.CanSeek)
+            stream.CopyTo(seekableCopy);
+        seekableCopy.Position = 0;
+        using var excelReader = ExcelReaderFactory.CreateReader(
+            stream.CanSeek ? stream : seekableCopy, config);
 
-        // Iterate worksheets until one with enough structured content is found
-        do
-        {
-            int sheetColumnCount = excelReader.FieldCount;
-
-            while (excelReader.Read())
-            {
-                // Count non-empty cells in this row
-                int nonEmpty = 0;
-                for (int i = 0; i < sheetColumnCount; i++)
-                {
-                    if (!string.IsNullOrWhiteSpace(excelReader.GetValue(i)?.ToString()))
-                        nonEmpty++;
-                }
-
-                // Skip fully empty rows and single-cell rows when the sheet has multiple columns.
-                // A single occupied cell in a multi-column sheet is almost always a report title
-                // ("REPORTE DE VENTAS - ABRIL 2026"), not a header row.
-                int minRequired = sheetColumnCount > 1 ? 2 : 1;
-                if (nonEmpty < minRequired) continue;
-
-                // First row that passes the threshold is the header row
-                var raw = new List<string>();
-                for (int i = 0; i < sheetColumnCount; i++)
-                    raw.Add(excelReader.GetValue(i)?.ToString()?.Trim() ?? "");
-
-                return ValidateAndNormalizeHeaders(raw);
-            }
-        }
-        while (excelReader.NextResult());
-
-        throw new ValidationException("file", "El archivo Excel no contiene encabezados válidos en ninguna hoja.");
+        // Only the first row of the first worksheet defines column names.
+        // Never promote a title or a data row to headers.
+        if (!excelReader.Read())
+            throw new ValidationException("file", "El archivo Excel está vacío.");
+        var raw = Enumerable.Range(0, excelReader.FieldCount)
+            .Select(i => excelReader.GetValue(i)?.ToString()?.Trim() ?? "")
+            .ToList();
+        return ValidateAndNormalizeHeaders(raw);
     }
 
     private static IReadOnlyList<string> ValidateAndNormalizeHeaders(IEnumerable<string> rawHeaders)
@@ -603,6 +581,9 @@ public class DatasetService : IDatasetService
 
         if (headers.Count == 0)
             throw new ValidationException("file", "No se encontraron encabezados en el archivo.");
+
+        if (headers.Any(string.IsNullOrWhiteSpace))
+            throw new ValidationException("file", "La primera fila contiene columnas sin nombre. Completa los encabezados.");
 
         // Detect duplicate headers (case-insensitive)
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

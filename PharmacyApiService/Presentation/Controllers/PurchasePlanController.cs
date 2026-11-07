@@ -48,11 +48,11 @@ public class PurchasePlanController : ControllerBase
     [Consumes("multipart/form-data")]
     public async Task<ActionResult<ApiResponse<PlanEvaluationResponse>>> Evaluate(
         Guid id,
-        [FromForm] IFormFile actualSalesFile,
+        IFormFile actualSalesFile,
         [FromForm] string productCol,
         [FromForm] string quantityCol,
         [FromForm] string? priceCol,
-        [FromForm] IFormFile? pharmacyPlanFile,
+        IFormFile? pharmacyPlanFile,
         [FromForm] string? pharmacyProductCol,
         [FromForm] string? pharmacyQuantityCol,
         CancellationToken ct)
