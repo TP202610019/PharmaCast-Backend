@@ -1,4 +1,5 @@
 using ExcelDataReader;
+using System.Globalization;
 using Microsoft.AspNetCore.Http;
 using PharmacyApiService.Application.Interfaces;
 using PharmacyApiService.Application.Interfaces.Repositories;
@@ -17,17 +18,20 @@ public class DatasetService : IDatasetService
     private readonly IMappingConfigRepository _mappings;
     private readonly IBlobStorageService _blob;
     private readonly ILogger<DatasetService> _logger;
+    private readonly int _minimumHistoryMonths;
 
     public DatasetService(
         IDatasetRepository datasets,
         IMappingConfigRepository mappings,
         IBlobStorageService blob,
-        ILogger<DatasetService> logger)
+        ILogger<DatasetService> logger,
+        IConfiguration configuration)
     {
         _datasets = datasets;
         _mappings = mappings;
         _blob = blob;
         _logger = logger;
+        _minimumHistoryMonths = Math.Max(1, configuration.GetValue("DatasetValidation:MinimumHistoryMonths", 4));
     }
 
     // ── Upload ────────────────────────────────────────────────────────────────
@@ -174,6 +178,9 @@ public class DatasetService : IDatasetService
         if (dataset.BlobContainer != AppConstants.Blob.TemporaryDatasetContainer || dataset.BlobPath is null)
             throw new ValidationException("dataset", "El dataset no tiene un archivo temporal válido.");
 
+        if (request.FieldType == "sales")
+            await ValidateHistoryRangeAsync(dataset, mapping, ct);
+
         var source = dataset.BlobContainer;
         var destination = AppConstants.Blob.RawDatasetContainer;
         await _blob.MoveAsync(source, dataset.BlobPath, destination, dataset.BlobPath, ct);
@@ -193,6 +200,52 @@ public class DatasetService : IDatasetService
             throw;
         }
         return MapToResponse(dataset);
+    }
+
+    private async Task ValidateHistoryRangeAsync(Dataset dataset, MappingConfiguration mapping, CancellationToken ct)
+    {
+        var dateColumn = mapping.Fields.Single(f => f.MappingField?.IsActive == true
+            && f.MappingField.FieldKey == "date").DatasetColumnName.Trim();
+        await using var source = await _blob.DownloadAsync(dataset.BlobContainer!, dataset.BlobPath!, ct)
+            ?? throw new ValidationException("file", "No se pudo leer el histórico para validar sus fechas.");
+        using var buffer = new MemoryStream();
+        await source.CopyToAsync(buffer, ct);
+        buffer.Position = 0;
+        var config = new ExcelReaderConfiguration
+        {
+            FallbackEncoding = System.Text.Encoding.GetEncoding(1252),
+            AutodetectSeparators = [',', ';', '\t'],
+            LeaveOpen = true
+        };
+        using var reader = dataset.FileType == FileType.CSV
+            ? ExcelReaderFactory.CreateCsvReader(buffer, config)
+            : ExcelReaderFactory.CreateReader(buffer, config);
+        if (!reader.Read()) throw new ValidationException("file", "El histórico está vacío.");
+        var index = Enumerable.Range(0, reader.FieldCount).First(i =>
+            string.Equals(reader.GetValue(i)?.ToString()?.Trim().TrimStart('\uFEFF'), dateColumn, StringComparison.OrdinalIgnoreCase));
+        DateTime? first = null, last = null;
+        while (reader.Read())
+        {
+            ct.ThrowIfCancellationRequested();
+            var value = reader.GetValue(index);
+            DateTime date;
+            if (value is DateTime typed) date = typed;
+            else
+            {
+                var text = value?.ToString()?.Trim();
+                // ISO or day-first, matching the ML input contract. No US month-first fallback.
+                if (!DateTime.TryParse(text, CultureInfo.GetCultureInfo("es-PE"), DateTimeStyles.None, out date))
+                    continue;
+            }
+            date = date.Date;
+            first = first is null || date < first.Value ? date : first;
+            last = last is null || date > last.Value ? date : last;
+        }
+        if (first is null || last is null)
+            throw new ValidationException("date", "La columna de fecha mapeada no contiene fechas válidas.");
+        if (last.Value.AddDays(1) < first.Value.AddMonths(_minimumHistoryMonths))
+            throw new ValidationException("date",
+                $"Se requieren al menos {_minimumHistoryMonths} meses de histórico. El archivo abarca del {first:dd/MM/yyyy} al {last:dd/MM/yyyy}.");
     }
 
     private static void ValidateConfirmationMapping(
