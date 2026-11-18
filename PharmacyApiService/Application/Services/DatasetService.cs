@@ -171,6 +171,8 @@ public class DatasetService : IDatasetService
         {
             if (dataset.MappingConfigurationId != mapping.Id)
                 throw new ConflictException("El dataset ya fue confirmado con otro mapeo.");
+            if (request.FieldType == "sales")
+                await ValidateHistoryRangeAsync(dataset, mapping, ct);
             return MapToResponse(dataset);
         }
         if (dataset.DatasetStage != DatasetStage.Temporary || dataset.UploadStatus != UploadStatus.Pending)
