@@ -448,7 +448,7 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("double precision")
                         .HasColumnName("pharma_cast_total_sobrestock_soles");
 
-                    b.Property<double>("PharmaCastWape")
+                    b.Property<double?>("PharmaCastWape")
                         .HasColumnType("double precision")
                         .HasColumnName("pharma_cast_wape");
 
@@ -558,7 +558,7 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
 
-                    b.Property<double>("Wape")
+                    b.Property<double?>("Wape")
                         .HasColumnType("double precision")
                         .HasColumnName("wape");
 

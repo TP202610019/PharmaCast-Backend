@@ -8,7 +8,7 @@ public class PlanEvaluationItemResponse
     public double? PharmacyPlan { get; set; }
     public string PharmaCastAccuracy { get; set; } = string.Empty;
     public string? PharmacyAccuracy { get; set; }
-    public double Wape { get; set; }
+    public double? Wape { get; set; }
     public double? PharmacyWape { get; set; }
     public double SobrestockSoles { get; set; }
     public double DesabastoSoles { get; set; }
@@ -25,7 +25,7 @@ public class PlanEvaluationSummaryResponse
     public bool HasPrice { get; set; }
     public double PharmaCastGoodPct { get; set; }
     public double PharmacyGoodPct { get; set; }
-    public double PharmaCastWape { get; set; }
+    public double? PharmaCastWape { get; set; }
     public double? PharmacyWape { get; set; }
     public double PharmaCastTotalSobrestockSoles { get; set; }
     public double PharmaCastTotalDesabastoSoles { get; set; }
