@@ -25,6 +25,14 @@ public class MappingConfigService : IMappingConfigService
 
     public async Task<MappingConfigResponse> CreateAsync(CreateMappingRequest request, Guid userId, CancellationToken ct = default)
     {
+        var config = new MappingConfiguration
+        {
+            UserId = userId,
+            ConfigurationName = request.ConfigurationName,
+            IsDefault = request.IsDefault
+        };
+        var fieldEntities = await BuildFieldEntities(config.Id, request.Fields, ct);
+
         // Find-or-create: return the existing config if the user already has one with this name.
         var duplicate = await _repo.GetByNameAsync(userId, request.ConfigurationName, ct);
         if (duplicate is not null)
@@ -45,15 +53,6 @@ public class MappingConfigService : IMappingConfigService
             }
         }
 
-        var config = new MappingConfiguration
-        {
-            UserId            = userId,
-            ConfigurationName = request.ConfigurationName,
-            IsDefault         = request.IsDefault
-        };
-
-        // Build field entities using the already-assigned Guid so EF cascades the insert
-        var fieldEntities = await BuildFieldEntities(config.Id, request.Fields, ct);
         foreach (var fe in fieldEntities)
             config.Fields.Add(fe);
 
@@ -93,6 +92,7 @@ public class MappingConfigService : IMappingConfigService
         if (config.UserId != userId)
             throw new ForbiddenException();
 
+        var fieldEntities = await BuildFieldEntities(config.Id, request.Fields, ct);
         if (request.IsDefault && !config.IsDefault)
         {
             var existing = await _repo.GetDefaultForUserAsync(userId, ct);
@@ -109,7 +109,6 @@ public class MappingConfigService : IMappingConfigService
 
         // Replace all fields: remove old, add new
         config.Fields.Clear();
-        var fieldEntities = await BuildFieldEntities(config.Id, request.Fields, ct);
         foreach (var fe in fieldEntities)
             config.Fields.Add(fe);
 
@@ -160,22 +159,38 @@ public class MappingConfigService : IMappingConfigService
         CancellationToken ct)
     {
         var result = new List<MappingConfigurationField>();
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var types = new HashSet<string>();
         foreach (var entry in entries)
         {
             var fieldDef = await _fields.GetByKeyAsync(entry.FieldKey, ct);
-            if (fieldDef is null)
-            {
-                _logger.LogWarning("[MAPPING] Unknown field_key '{Key}' — skipping.", entry.FieldKey);
-                continue;
-            }
+            if (fieldDef is null || !fieldDef.IsActive)
+                throw new ValidationException("fields", $"El campo '{entry.FieldKey}' no está disponible.");
+            if (string.IsNullOrWhiteSpace(entry.DatasetColumnName) || !keys.Add(fieldDef.FieldKey))
+                throw new ValidationException("fields", $"Asigna una sola columna no vacía a '{fieldDef.DisplayName}'.");
+            types.Add(fieldDef.FieldType);
 
             result.Add(new MappingConfigurationField
             {
                 MappingConfigurationId = configId,
                 MappingFieldId         = fieldDef.Id,
-                DatasetColumnName      = entry.DatasetColumnName
+                DatasetColumnName      = entry.DatasetColumnName.Trim()
             });
         }
+        var missing = new List<string>();
+        if (result.Count == 0 || types.Contains("sales"))
+        {
+            if (!keys.Contains("date")) missing.Add("fecha");
+            if (!keys.Contains("product") && !keys.Contains("product_id")) missing.Add("producto de ventas");
+            if (!keys.Contains("quantity")) missing.Add("cantidad");
+        }
+        if (types.Contains("inventory"))
+        {
+            if (!keys.Contains("inv_product")) missing.Add("producto de inventario");
+            if (!keys.Contains("stock")) missing.Add("stock");
+        }
+        if (missing.Count > 0)
+            throw new ValidationException("fields", $"Completa los campos obligatorios: {string.Join(", ", missing)}.");
         return result;
     }
 
