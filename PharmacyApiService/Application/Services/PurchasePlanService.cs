@@ -47,19 +47,18 @@ public class PurchasePlanService : IPurchasePlanService
 
         // Read inventory stock if provided
         Dictionary<string, double> stockMap = [];
-        if (request.InventoryDatasetId.HasValue && request.InventoryFieldMappings is { Count: > 0 })
+        if (request.InventoryDatasetId.HasValue)
         {
-            var productCol = request.InventoryFieldMappings.GetValueOrDefault("product", "");
-            var stockCol   = request.InventoryFieldMappings.GetValueOrDefault("stock", "");
-            if (!string.IsNullOrWhiteSpace(productCol) && !string.IsNullOrWhiteSpace(stockCol))
-            {
-                try
-                {
-                    stockMap = await _datasets.ReadInventoryStockAsync(
-                        request.InventoryDatasetId.Value, userId, productCol, stockCol, ct);
-                }
-                catch { /* non-fatal: fall back to demand-only plan */ }
-            }
+            var fields = request.InventoryFieldMappings;
+            var productCol = fields?.GetValueOrDefault("inv_product")
+                ?? fields?.GetValueOrDefault("product") ?? fields?.GetValueOrDefault("product_id");
+            var stockCol = fields?.GetValueOrDefault("stock");
+            if (string.IsNullOrWhiteSpace(productCol) || string.IsNullOrWhiteSpace(stockCol))
+                throw new ValidationException("inventory", "Mapea las columnas de producto y stock del inventario.");
+            stockMap = await _datasets.ReadInventoryStockAsync(
+                request.InventoryDatasetId.Value, userId, productCol, stockCol, ct);
+            if (stockMap.Count == 0 || stockMap.Values.Any(v => !double.IsFinite(v) || v < 0))
+                throw new ValidationException("inventory", "El inventario debe contener productos con stock válido y no negativo.");
         }
 
         var productGroups = execution.ForecastResults
@@ -71,9 +70,9 @@ public class PurchasePlanService : IPurchasePlanService
         var items = productGroups.Select(g =>
         {
             var demandPredicted = g.Sum(f => f.PredictedQuantity);
-            var stockActual     = hasInventory
-                ? stockMap.GetValueOrDefault(g.Key, stockMap.GetValueOrDefault(g.Key.ToLowerInvariant(), 0))
-                : (double?)null;
+            double? stockActual = hasInventory && stockMap.TryGetValue(g.Key, out var stock) ? stock : null;
+            if (hasInventory && !stockActual.HasValue)
+                throw new ValidationException("inventory", $"El producto '{g.Key}' no tiene stock informado. Incluye una fila con cero si no hay existencias.");
             var toPurchase      = stockActual.HasValue
                 ? Math.Max(0, demandPredicted - stockActual.Value)
                 : demandPredicted;
@@ -151,13 +150,20 @@ public class PurchasePlanService : IPurchasePlanService
 
         bool hasPrice = !string.IsNullOrWhiteSpace(priceCol) && actualPrices.Count > 0;
 
-        bool hasPharmacyPlan = true; // always simulate pharmacy plan for demo comparison — any uploaded pharmacy plan file is ignored
+        bool hasPharmacyPlan = pharmacyPlanFile is not null;
+        Dictionary<string, double> pharmacyPlan = [];
+        if (hasPharmacyPlan)
+        {
+            if (string.IsNullOrWhiteSpace(pharmacyProductCol) || string.IsNullOrWhiteSpace(pharmacyQuantityCol))
+                throw new ValidationException("pharmacyPlan", "Mapea producto y cantidad del plan de la farmacia.");
+            (pharmacyPlan, _) = ParseCsvColumns(pharmacyPlanFile!, pharmacyProductCol, pharmacyQuantityCol, null);
+        }
 
         static double CalcAbsError(double planned, double actual) =>
             Math.Abs(planned - actual);
 
         static string AccuracyLabel(double absErr, double actual) =>
-            actual <= 0 ? "ok"
+            actual <= 0 ? (absErr == 0 ? "good" : "poor")
             : absErr / actual <= 0.15 ? "good"
             : absErr / actual <= 0.40 ? "ok" : "poor";
 
@@ -186,6 +192,18 @@ public class PurchasePlanService : IPurchasePlanService
         var normalizedPrices = actualPrices
             .GroupBy(kv => NormName(kv.Key), StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Average(kv => kv.Value), StringComparer.OrdinalIgnoreCase);
+        var normalizedPharmacy = pharmacyPlan.GroupBy(kv => NormName(kv.Key))
+            .ToDictionary(g => g.Key, g => g.Sum(kv => kv.Value));
+        var planKeys = plan.Items.Select(i => NormName(i.ProductName)).ToHashSet();
+        var missingSales = plan.Items.Where(i => !normalizedSales.ContainsKey(NormName(i.ProductName)))
+            .Select(i => i.ProductName).ToList();
+        var extraSales = actualSales.Keys.Where(name => !planKeys.Contains(NormName(name))).ToList();
+        if (missingSales.Count > 0 || extraSales.Count > 0)
+            throw new ValidationException("products",
+                $"Productos sin correspondencia. Sin ventas informadas: {string.Join(", ", missingSales)}. " +
+                $"Sin producto en el plan: {string.Join(", ", extraSales)}. Informa cero explícitamente cuando no hubo ventas.");
+        if (hasPharmacyPlan && planKeys.Any(key => !normalizedPharmacy.ContainsKey(key)))
+            throw new ValidationException("pharmacyPlan", "El plan de la farmacia debe informar cantidades para todos los productos evaluados, incluyendo ceros.");
         // Only evaluate products that appear in the actual-sales CSV.
         var items = plan.Items
             .Where(i => normalizedSales.ContainsKey(NormName(i.ProductName)))
@@ -194,31 +212,8 @@ public class PurchasePlanService : IPurchasePlanService
                 var key        = NormName(i.ProductName);
                 var actualSold = normalizedSales[key];
 
-                // Demo simulation: deterministic per-product factor so results
-                // are reproducible. Bucket derived from product name char sum.
-                var bucket = Math.Abs(key.Sum(c => (int)c)) % 100;
-
-                // PharmaCast: 83% products within ±14% (good, clearly closer to actual than the
-                // pharmacy line but with a visible gap — not a near-perfect overlap), 9% moderate
-                // over, 8% moderate under. This line must consistently stay closest to actual.
-                double pharmaCastPlan = bucket < 83
-                    ? actualSold * (0.86 + (bucket % 29) * 0.01)        // 0.86–1.14
-                    : bucket < 92
-                        ? actualSold * (1.20 + (bucket % 9) * 0.03)     // 1.20–1.44
-                        : actualSold * (0.50 + (bucket % 8) * 0.035);   // 0.50–0.745
-                pharmaCastPlan = Math.Max(1, Math.Round(pharmaCastPlan));
-
-                // Pharmacy plan: always simulate over-ordering for the demo comparison — any
-                // uploaded pharmacy plan file is ignored, this must never reflect real data.
-                // 50% near-correct (wider band than PharmaCast's, for a visibly bigger gap),
-                // 35% over-ordered (dominant failure mode — realistic pharmacy overstocking,
-                // pushed further out than before), 15% under-ordered (variety/desabasto scenario,
-                // also pushed further out). This line must consistently trail PharmaCast.
-                double? pharmacyQty = bucket < 50
-                    ? Math.Max(1, Math.Round(actualSold * (0.87 + (bucket % 27) * 0.01)))     // 0.87–1.13
-                    : bucket < 85
-                        ? Math.Max(1, Math.Round(actualSold * (1.25 + (bucket % 35) * 0.021))) // 1.25–1.96
-                        : Math.Max(1, Math.Round(actualSold * (0.45 + (bucket % 15) * 0.028))); // 0.45–0.84
+                double pharmaCastPlan = i.RecommendedQuantity;
+                double? pharmacyQty = normalizedPharmacy.TryGetValue(key, out var qty) ? qty : null;
                 var price          = hasPrice ? normalizedPrices.GetValueOrDefault(key) : 0;
 
                 var pcAbsErr    = CalcAbsError(pharmaCastPlan, actualSold);
@@ -242,10 +237,10 @@ public class PurchasePlanService : IPurchasePlanService
             }).ToList();
 
         int n         = items.Count;
-        // PharmaCast/Pharmacy effectiveness are pinned to fixed percentages for the demo panel,
-        // independent of the per-item bucket simulation above (which drives the chart/table only).
-        int pcGood    = n > 0 ? (int)Math.Round(n * 0.836) : 0;
-        int pharmGood = n > 0 ? (int)Math.Round(n * 0.678) : 0;
+        if (n == 0) throw new ValidationException("products", "No hay productos coincidentes entre el plan y las ventas reales.");
+        int pcGood = items.Count(i => i.PharmaCastAccuracy == "good");
+        int pharmGood = items.Count(i => i.PharmacyAccuracy == "good");
+        int pharmacyCount = items.Count(i => i.PharmacyPlan.HasValue);
 
         double totalActual     = items.Sum(x => x.ActualSold);
         double pcTotalAbsErr   = items.Sum(x => Math.Abs(x.PharmaCastPlan - x.ActualSold));
@@ -260,8 +255,8 @@ public class PurchasePlanService : IPurchasePlanService
             HasPrice                       = hasPrice,
             PharmaCastGoodCount            = pcGood,
             PharmacyGoodCount              = pharmGood,
-            PharmaCastGoodPct              = n > 0 ? 83.6 : 0,
-            PharmacyGoodPct                = n > 0 ? 67.8 : 0,
+            PharmaCastGoodPct              = Math.Round(100.0 * pcGood / n, 1),
+            PharmacyGoodPct                = pharmacyCount > 0 ? Math.Round(100.0 * pharmGood / pharmacyCount, 1) : 0,
             PharmaCastWape                 = totalActual > 0 ? Math.Round(pcTotalAbsErr / totalActual * 100, 1) : 0,
             PharmacyWape                   = hasPharmacyPlan && totalActual > 0
                 ? Math.Round(pharmTotalAbsErr / totalActual * 100, 1)
@@ -369,10 +364,49 @@ public class PurchasePlanService : IPurchasePlanService
     private static (Dictionary<string, double> primary, Dictionary<string, double> secondary)
         ParseCsvColumns(IFormFile file, string productCol, string primaryCol, string? secondaryCol)
     {
+        var constraint = DatasetFileValidator.GetConstraintError(file);
+        if (constraint is not null) throw new ValidationException("file", constraint);
+        if (string.IsNullOrWhiteSpace(productCol) || string.IsNullOrWhiteSpace(primaryCol))
+            throw new ValidationException("mapping", "Selecciona las columnas de producto y cantidad.");
         var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
-        return ext is ".xlsx" or ".xls"
-            ? ParseExcelColumns(file, productCol, primaryCol, secondaryCol)
-            : ParseCsvColumnsFromStream(file, productCol, primaryCol, secondaryCol);
+        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+        using var stream = file.OpenReadStream();
+        var config = new ExcelReaderConfiguration { FallbackEncoding = System.Text.Encoding.GetEncoding(1252), AutodetectSeparators = [',', ';', '\t'] };
+        using var reader = ext == ".csv" ? ExcelReaderFactory.CreateCsvReader(stream, config)
+            : ExcelReaderFactory.CreateReader(stream, config);
+        var primary = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        var secondary = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        if (!reader.Read()) throw new ValidationException("file", "El archivo está vacío.");
+        var headers = Enumerable.Range(0, reader.FieldCount)
+            .Select(i => reader.GetValue(i)?.ToString()?.Trim().TrimStart('\uFEFF') ?? "").ToList();
+        int Column(string name)
+        {
+            var matches = headers.Select((h, i) => (h, i)).Where(x => string.Equals(x.h, name.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+            if (matches.Count != 1) throw new ValidationException("mapping", $"La columna '{name}' debe existir una sola vez en el archivo.");
+            return matches[0].i;
+        }
+        var productIndex = Column(productCol);
+        var quantityIndex = Column(primaryCol);
+        var priceIndex = string.IsNullOrWhiteSpace(secondaryCol) ? -1 : Column(secondaryCol);
+        double Number(int index)
+        {
+            var raw = reader.GetValue(index);
+            var ok = double.TryParse(Convert.ToString(raw, System.Globalization.CultureInfo.InvariantCulture),
+                System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value);
+            if (!ok || !double.IsFinite(value) || value < 0)
+                throw new ValidationException("file", $"La columna '{headers[index]}' contiene una cantidad inválida o negativa.");
+            return value;
+        }
+        while (reader.Read())
+        {
+            if (Enumerable.Range(0, reader.FieldCount).All(i => string.IsNullOrWhiteSpace(reader.GetValue(i)?.ToString()))) continue;
+            var product = reader.GetValue(productIndex)?.ToString()?.Trim();
+            if (string.IsNullOrWhiteSpace(product)) throw new ValidationException("file", "Hay filas sin nombre de producto.");
+            primary[product] = primary.GetValueOrDefault(product) + Number(quantityIndex);
+            if (priceIndex >= 0) secondary[product] = Number(priceIndex);
+        }
+        if (primary.Count == 0) throw new ValidationException("file", "El archivo debe contener al menos una fila de datos.");
+        return (primary, secondary);
     }
 
     private static (Dictionary<string, double> primary, Dictionary<string, double> secondary)
