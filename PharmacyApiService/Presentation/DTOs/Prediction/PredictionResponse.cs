@@ -4,6 +4,7 @@ namespace PharmacyApiService.Presentation.DTOs.Prediction;
 
 public class PredictionResponse
 {
+    public string ForecastFrequency { get; set; } = "Daily";
     public Guid Id { get; set; }
     public Guid DatasetId { get; set; }
     public int ForecastPeriod { get; set; }
@@ -26,7 +27,7 @@ public class PredictionResponse
     public List<PredictionMetricResponse> BaselineProductMetrics { get; set; } = [];
     public IEnumerable<PredictionProductSummary> ProductSummaries => ForecastResults.GroupBy(f => f.ProductName).Select(g =>
     {
-        var average = g.Average(f => f.PredictedQuantity);
+        var average = g.Sum(f => f.PredictedQuantity) / Math.Max(ForecastPeriod, 1);
         var historical = Metrics.FirstOrDefault(m => m.Method == MetricMethod.XGBoost
             && m.Scope == MetricScope.Product && m.ProductName == g.Key)?.HistoricalAvg;
         return new PredictionProductSummary {
@@ -60,6 +61,7 @@ public class PredictionProductSummary
 
 public class ForecastResultResponse
 {
+    public DateTime? PeriodEnd { get; set; }
     public string ProductName { get; set; } = string.Empty;
     public DateTime ForecastDate { get; set; }
     public int? ForecastStep { get; set; }

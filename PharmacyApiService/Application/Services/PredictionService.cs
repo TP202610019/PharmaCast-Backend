@@ -178,6 +178,14 @@ public class PredictionService : IPredictionService
                 "[PREDICT-5] ML Service responded — status={Status}, forecastEntries={ForecastCount}, productMetrics={ProductCount}",
                 mlResponse.Status, mlResponse.Forecast.Count, mlResponse.ProductMetrics.Count);
 
+            if (mlResponse.ForecastFrequency != "Weekly" || mlResponse.Forecast.Any(f => !f.PeriodEnd.HasValue))
+                throw new ValidationException("forecast", "El servicio ML debe devolver bloques semanales con fecha final.");
+            var expectedBlocks = (request.ForecastPeriod + 6) / 7;
+            if (mlResponse.Forecast.Count == 0 || mlResponse.Forecast.Any(f => !double.IsFinite(f.PredictedQuantity) || f.PredictedQuantity < 0)
+                || mlResponse.Forecast.GroupBy(f => f.ProductId).Any(g => g.Count() != expectedBlocks
+                    || !g.Select(f => f.ForecastStep).Order().SequenceEqual(Enumerable.Range(1, expectedBlocks))))
+                throw new ValidationException("forecast", "El servicio ML devolvió semanas incompletas o cantidades inválidas.");
+            execution.ForecastFrequency = mlResponse.ForecastFrequency;
             // ── 5a. Persist forecast results ──────────────────────────────────
             var forecastResults = mlResponse.Forecast
                 .Select(f =>
@@ -197,6 +205,7 @@ public class PredictionService : IPredictionService
                         PredictionExecutionId = execution.Id,
                         ProductName           = f.ProductId,
                         ForecastDate          = utcDate,
+                        PeriodEnd             = f.PeriodEnd,
                         ForecastStep          = f.ForecastStep,
                         PredictedQuantity     = f.PredictedQuantity,
                         LowerBound            = null,
@@ -218,6 +227,7 @@ public class PredictionService : IPredictionService
                 {
                     ProductName       = f.ProductName,
                     ForecastDate      = f.ForecastDate,
+                    PeriodEnd         = f.PeriodEnd,
                     ForecastStep      = f.ForecastStep,
                     PredictedQuantity = f.PredictedQuantity,
                     LowerBound        = f.LowerBound,
@@ -305,6 +315,7 @@ public class PredictionService : IPredictionService
             Id                 = execution.Id,
             DatasetId          = execution.DatasetId,
             ForecastPeriod     = execution.ForecastPeriod,
+            ForecastFrequency  = execution.ForecastFrequency,
             ExecutionStatus    = execution.ExecutionStatus,
             StartedAt          = execution.StartedAt,
             CompletedAt        = execution.CompletedAt,
@@ -442,6 +453,7 @@ public class PredictionService : IPredictionService
         Id              = e.Id,
         DatasetId       = e.DatasetId,
         ForecastPeriod  = e.ForecastPeriod,
+        ForecastFrequency = e.ForecastFrequency,
         ExecutionStatus = e.ExecutionStatus,
         StartedAt       = e.StartedAt,
         CompletedAt     = e.CompletedAt,
@@ -458,6 +470,7 @@ public class PredictionService : IPredictionService
         {
             ProductName       = f.ProductName,
             ForecastDate      = f.ForecastDate,
+            PeriodEnd         = f.PeriodEnd,
             ForecastStep      = f.ForecastStep,
             PredictedQuantity = f.PredictedQuantity,
             LowerBound        = f.LowerBound,

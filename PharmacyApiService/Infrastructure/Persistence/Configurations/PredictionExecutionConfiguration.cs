@@ -13,6 +13,7 @@ public class PredictionExecutionConfiguration : IEntityTypeConfiguration<Predict
         builder.HasKey(x => x.Id);
 
         builder.Property(x => x.ForecastPeriod).IsRequired();
+        builder.Property(x => x.ForecastFrequency).HasMaxLength(10).HasDefaultValue("Daily").IsRequired();
         builder.Property(x => x.ExecutionStatus)
             .IsRequired()
             .HasConversion<string>()

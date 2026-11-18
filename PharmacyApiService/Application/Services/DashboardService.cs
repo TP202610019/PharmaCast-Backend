@@ -162,6 +162,8 @@ public class DashboardService : IDashboardService
             .ToListAsync(ct);
 
         var priorities = BuildPriorityMap(productStats.Select(p => (p.ProductName, p.TotalPredicted)));
+        var periodDays = await _db.PredictionExecutions.Where(e => e.Id == predictionId)
+            .Select(e => e.ForecastPeriod).FirstAsync(ct);
         var filtered = productStats.Where(p => p.TotalPredicted > 0);
         if (!string.IsNullOrWhiteSpace(search))
             filtered = filtered.Where(p => p.ProductName.Contains(search, StringComparison.OrdinalIgnoreCase));
@@ -187,7 +189,7 @@ public class DashboardService : IDashboardService
         {
             ProductName            = r.ProductName,
             TotalPredictedQuantity = Math.Round(r.TotalPredicted),
-            AvgPredictedQuantity   = Math.Round(r.AvgPredicted, 1),
+            AvgPredictedQuantity   = Math.Round(r.TotalPredicted / Math.Max(periodDays, 1), 2),
             Priority               = priorities.GetValueOrDefault(r.ProductName, "low"),
             HistoricalAvg          = historicalAvgMap.TryGetValue(r.ProductName, out var ha) ? ha : null,
         }).ToList();
@@ -217,6 +219,7 @@ public class DashboardService : IDashboardService
             .Select(f => new
             {
                 f.ForecastDate,
+                f.PeriodEnd,
                 f.PredictedQuantity,
                 f.LowerBound,
                 f.UpperBound
@@ -228,6 +231,7 @@ public class DashboardService : IDashboardService
             return new DashboardChartPoint
             {
                 Date = r.ForecastDate.ToString("yyyy-MM-dd"),
+                PeriodEnd = r.PeriodEnd?.ToString("yyyy-MM-dd"),
                 Predicted = r.PredictedQuantity,
                 Upper = r.UpperBound,
                 Lower = r.LowerBound
