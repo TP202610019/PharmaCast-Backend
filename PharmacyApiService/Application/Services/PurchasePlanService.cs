@@ -199,9 +199,15 @@ public class PurchasePlanService : IPurchasePlanService
             .Select(i => i.ProductName).ToList();
         var extraSales = actualSales.Keys.Where(name => !planKeys.Contains(NormName(name))).ToList();
         if (missingSales.Count > 0 || extraSales.Count > 0)
-            throw new ValidationException("products",
-                $"Productos sin correspondencia. Sin ventas informadas: {string.Join(", ", missingSales)}. " +
-                $"Sin producto en el plan: {string.Join(", ", extraSales)}. Informa cero explícitamente cuando no hubo ventas.");
+            throw new ValidationException(new Dictionary<string, string[]>
+            {
+                ["products"] = [$"Productos sin correspondencia. Sin ventas informadas: {string.Join(", ", missingSales)}. " +
+                    $"Sin producto en el plan: {string.Join(", ", extraSales)}. Informa cero explícitamente cuando no hubo ventas."],
+                ["missingSalesProducts"] = missingSales.ToArray(),
+                ["unmatchedSalesProducts"] = extraSales.ToArray(),
+                ["matchedProducts"] = plan.Items.Where(i => normalizedSales.ContainsKey(NormName(i.ProductName)))
+                    .Select(i => i.ProductName).ToArray()
+            });
         if (hasPharmacyPlan && planKeys.Any(key => !normalizedPharmacy.ContainsKey(key)))
             throw new ValidationException("pharmacyPlan", "El plan de la farmacia debe informar cantidades para todos los productos evaluados, incluyendo ceros.");
         // Only evaluate products that appear in the actual-sales CSV.
