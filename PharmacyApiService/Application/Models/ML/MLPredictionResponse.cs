@@ -6,6 +6,7 @@ namespace PharmacyApiService.Application.Models.ML;
 /// </summary>
 public class MLPredictionResponse
 {
+    public string ForecastFrequency { get; set; } = "Daily";
     public string PredictionExecutionId { get; set; } = string.Empty;
     public string DatasetId { get; set; } = string.Empty;
 
@@ -86,6 +87,7 @@ public class MLHistoricalEntry
 
 public class MLForecastEntry
 {
+    public DateTime? PeriodEnd { get; set; }
     public string ProductId { get; set; } = string.Empty;
 
     /// <summary>ISO date string, e.g. "2025-06-01".</summary>

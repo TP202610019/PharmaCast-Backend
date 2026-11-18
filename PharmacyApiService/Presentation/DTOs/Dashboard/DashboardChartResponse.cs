@@ -2,6 +2,7 @@ namespace PharmacyApiService.Presentation.DTOs.Dashboard;
 
 public class DashboardChartPoint
 {
+    public string? PeriodEnd { get; set; }
     /// <summary>ISO date string in "yyyy-MM-dd" format.</summary>
     public string Date { get; set; } = string.Empty;
     public double Predicted { get; set; }

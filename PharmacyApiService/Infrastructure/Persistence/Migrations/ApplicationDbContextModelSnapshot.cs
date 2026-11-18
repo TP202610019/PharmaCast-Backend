@@ -178,6 +178,10 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("double precision")
                         .HasColumnName("lower_bound");
 
+                    b.Property<DateTime?>("PeriodEnd")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("period_end");
+
                     b.Property<double>("PredictedQuantity")
                         .HasColumnType("double precision")
                         .HasColumnName("predicted_quantity");
@@ -613,6 +617,14 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)")
                         .HasColumnName("execution_status");
+
+                    b.Property<string>("ForecastFrequency")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasDefaultValue("Daily")
+                        .HasColumnName("forecast_frequency");
 
                     b.Property<int>("ForecastPeriod")
                         .HasColumnType("integer")

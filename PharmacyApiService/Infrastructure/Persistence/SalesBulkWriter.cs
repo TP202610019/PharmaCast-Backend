@@ -29,7 +29,7 @@ public static class SalesBulkWriter
     {
         var connection = (NpgsqlConnection)db.Database.GetDbConnection();
         await using var writer = await connection.BeginBinaryImportAsync(
-            "COPY forecast_results (id,prediction_execution_id,product_name,forecast_date,forecast_step,predicted_quantity,lower_bound,upper_bound,created_at,updated_at) FROM STDIN (FORMAT BINARY)", ct);
+            "COPY forecast_results (id,prediction_execution_id,product_name,forecast_date,period_end,forecast_step,predicted_quantity,lower_bound,upper_bound,created_at,updated_at) FROM STDIN (FORMAT BINARY)", ct);
         foreach (var row in rows)
         {
             await writer.StartRowAsync(ct);
@@ -37,6 +37,8 @@ public static class SalesBulkWriter
             await writer.WriteAsync(row.PredictionExecutionId, NpgsqlDbType.Uuid, ct);
             await writer.WriteAsync(row.ProductName, NpgsqlDbType.Text, ct);
             await writer.WriteAsync(row.ForecastDate, NpgsqlDbType.TimestampTz, ct);
+            if (row.PeriodEnd.HasValue) await writer.WriteAsync(row.PeriodEnd.Value, NpgsqlDbType.TimestampTz, ct);
+            else await writer.WriteNullAsync(ct);
             if (row.ForecastStep.HasValue) await writer.WriteAsync(row.ForecastStep.Value, NpgsqlDbType.Integer, ct);
             else await writer.WriteNullAsync(ct);
             await writer.WriteAsync(row.PredictedQuantity, NpgsqlDbType.Double, ct);
