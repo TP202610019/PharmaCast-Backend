@@ -350,17 +350,27 @@ public class PredictionService : IPredictionService
 
     public async Task<IReadOnlyList<PredictionSummaryResponse>> GetHistoryAsync(Guid userId, CancellationToken ct = default)
     {
-        var executions = await _predictions.GetByUserAsync(userId, ct);
-        return executions.Select(e => new PredictionSummaryResponse
+        return await _db.PredictionExecutions.AsNoTracking()
+            .Where(e => e.ExecutedBy == userId)
+            .OrderByDescending(e => e.CreatedAt)
+            .Select(e => new PredictionSummaryResponse
         {
             Id              = e.Id,
             DatasetId       = e.DatasetId,
-            DatasetName     = e.Dataset?.OriginalFileName ?? string.Empty,
+            DatasetName     = e.Dataset.OriginalFileName,
             ForecastPeriod  = e.ForecastPeriod,
             ExecutionStatus = e.ExecutionStatus,
             CompletedAt     = e.CompletedAt,
-            CreatedAt       = e.CreatedAt
-        }).ToList();
+            CreatedAt       = e.CreatedAt,
+            TotalProducts   = e.ExecutionStatus == ExecutionStatus.Completed
+                ? e.ForecastResults.Select(f => f.ProductName).Distinct().Count() : null,
+            TotalUnits      = e.ExecutionStatus == ExecutionStatus.Completed
+                ? e.ForecastResults.Sum(f => f.PredictedQuantity) : null,
+            Accuracy        = e.ExecutionStatus == ExecutionStatus.Completed
+                ? e.PredictionMetrics.Where(m => m.Scope == MetricScope.Overall && m.Method == MetricMethod.XGBoost)
+                    .Select(m => 100.0 - m.TotalErrorPercentage).FirstOrDefault()
+                : null
+        }).ToListAsync(ct);
     }
 
     private async Task SaveHistoryAsync(Guid datasetId, List<MLHistoricalEntry> points, CancellationToken ct)

@@ -41,6 +41,9 @@ public class PredictionResponse
 
 public class PredictionSummaryResponse
 {
+    public int? TotalProducts { get; set; }
+    public double? TotalUnits { get; set; }
+    public double? Accuracy { get; set; }
     public Guid Id { get; set; }
     public Guid DatasetId { get; set; }
     public string DatasetName { get; set; } = string.Empty;
