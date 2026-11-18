@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http;
 using PharmacyApiService.Shared.Constants;
+using ExcelDataReader;
 
 namespace PharmacyApiService.Application.Services;
 
@@ -57,6 +58,37 @@ public static class DatasetFileValidator
                 || magic[0] != 0xD0 || magic[1] != 0xCF
                 || magic[2] != 0x11 || magic[3] != 0xE0)
                 return (null, "El archivo no tiene un formato XLS válido.");
+        }
+
+        // Inspect the workbook itself: a valid file signature alone does not
+        // guarantee headers or data in the first sheet consumed by the pipeline.
+        if (ext is ".xls" or ".xlsx")
+        {
+            System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+            try
+            {
+                using var stream = file.OpenReadStream();
+                using var reader = ExcelReaderFactory.CreateReader(stream);
+                if (!reader.Read() || !Enumerable.Range(0, reader.FieldCount)
+                    .Any(i => !string.IsNullOrWhiteSpace(reader.GetValue(i)?.ToString())))
+                    return (null, "El archivo Excel no contiene una fila de encabezados.");
+                int rows = 0;
+                while (reader.Read())
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (Enumerable.Range(0, reader.FieldCount)
+                        .Any(i => !string.IsNullOrWhiteSpace(reader.GetValue(i)?.ToString()))) rows++;
+                }
+                return rows == 0
+                    ? (null, "El archivo Excel debe contener al menos una fila de datos.")
+                    : (rows, null);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) when (ex is ExcelDataReader.Exceptions.ExcelReaderException
+                or System.IO.InvalidDataException or System.Xml.XmlException)
+            {
+                return (null, "No se pudo leer el archivo Excel. Verifica que sea un XLS o XLSX válido y sin contraseña.");
+            }
         }
 
         return (null, null);
