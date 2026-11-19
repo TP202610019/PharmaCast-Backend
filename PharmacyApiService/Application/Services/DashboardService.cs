@@ -123,8 +123,6 @@ public class DashboardService : IDashboardService
             .ToListAsync(ct);
 
         var productNames       = productStats.Select(p => p.Name).OrderBy(n => n).ToList();
-        var priorities         = BuildPriorityMap(productStats.Select(p => (p.Name, p.Total)));
-        var criticalCount      = priorities.Values.Count(priority => priority == "critical");
         var totalForecastedUnits = productStats.Sum(p => p.Total);
 
         return new DashboardSummaryResponse
@@ -135,7 +133,6 @@ public class DashboardService : IDashboardService
             LatestStatus         = status,
             Accuracy             = accuracy,
             TotalProducts        = productNames.Count,
-            CriticalCount        = criticalCount,
             TotalForecastedUnits = Math.Round(totalForecastedUnits),
             ProductNames         = productNames
         };
@@ -161,7 +158,8 @@ public class DashboardService : IDashboardService
             })
             .ToListAsync(ct);
 
-        var priorities = BuildPriorityMap(productStats.Select(p => (p.ProductName, p.TotalPredicted)));
+        var periodDays = await _db.PredictionExecutions.Where(e => e.Id == predictionId)
+            .Select(e => e.ForecastPeriod).FirstAsync(ct);
         var filtered = productStats.Where(p => p.TotalPredicted > 0);
         if (!string.IsNullOrWhiteSpace(search))
             filtered = filtered.Where(p => p.ProductName.Contains(search, StringComparison.OrdinalIgnoreCase));
@@ -187,8 +185,7 @@ public class DashboardService : IDashboardService
         {
             ProductName            = r.ProductName,
             TotalPredictedQuantity = Math.Round(r.TotalPredicted),
-            AvgPredictedQuantity   = Math.Round(r.AvgPredicted, 1),
-            Priority               = priorities.GetValueOrDefault(r.ProductName, "low"),
+            AvgPredictedQuantity   = Math.Round(r.TotalPredicted / Math.Max(periodDays, 1), 2),
             HistoricalAvg          = historicalAvgMap.TryGetValue(r.ProductName, out var ha) ? ha : null,
         }).ToList();
 
@@ -217,6 +214,7 @@ public class DashboardService : IDashboardService
             .Select(f => new
             {
                 f.ForecastDate,
+                f.PeriodEnd,
                 f.PredictedQuantity,
                 f.LowerBound,
                 f.UpperBound
@@ -228,6 +226,7 @@ public class DashboardService : IDashboardService
             return new DashboardChartPoint
             {
                 Date = r.ForecastDate.ToString("yyyy-MM-dd"),
+                PeriodEnd = r.PeriodEnd?.ToString("yyyy-MM-dd"),
                 Predicted = r.PredictedQuantity,
                 Upper = r.UpperBound,
                 Lower = r.LowerBound
@@ -264,24 +263,4 @@ public class DashboardService : IDashboardService
         };
     }
 
-    private static Dictionary<string, string> BuildPriorityMap(IEnumerable<(string Name, double Total)> products)
-    {
-        var ranked = products.Where(p => p.Total > 0)
-            .OrderByDescending(p => p.Total)
-            .ThenBy(p => p.Name, StringComparer.Ordinal)
-            .ToList();
-        var result = new Dictionary<string, string>();
-        for (var rank = 0; rank < ranked.Count; rank++)
-        {
-            var fraction = (double)rank / ranked.Count;
-            result[ranked[rank].Name] = fraction switch
-            {
-                < 0.15 => "critical",
-                < 0.40 => "high",
-                < 0.75 => "medium",
-                _ => "low"
-            };
-        }
-        return result;
-    }
 }

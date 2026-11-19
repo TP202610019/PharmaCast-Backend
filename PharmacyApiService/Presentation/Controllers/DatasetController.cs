@@ -21,7 +21,7 @@ public class DatasetController : ControllerBase
     }
 
     [HttpPost("upload")]
-    [RequestSizeLimit(AppConstants.MaxFileSizeBytes)]
+    [RequestSizeLimit(AppConstants.MaxFileSizeBytes + 64 * 1024)]
     public async Task<ActionResult<ApiResponse<DatasetResponse>>> Upload(
         IFormFile file,
         [FromQuery] Guid? mappingConfigId,
@@ -75,6 +75,17 @@ public class DatasetController : ControllerBase
         var userId = User.GetUserId();
         var headers = await _service.ExtractHeadersAsync(id, userId, ct);
         return Ok(ApiResponse<IReadOnlyList<string>>.Ok(headers));
+    }
+
+    [HttpPost("{id:guid}/validate-inventory")]
+    public async Task<ActionResult<ApiResponse>> ValidateInventory(
+        Guid id, [FromQuery] string productColumn, [FromQuery] string stockColumn, [FromQuery] string? purchaseCostColumn, CancellationToken ct)
+    {
+        var stock = await _service.ReadInventoryAsync(id, User.GetUserId(), productColumn, stockColumn, purchaseCostColumn, ct);
+        if (stock.Count == 0)
+            return UnprocessableEntity(ApiResponse.Fail(ResponseCodes.ValidationError,
+                "No se pudo leer el archivo de inventario. Vuelve a subirlo."));
+        return Ok(ApiResponse.Ok("Inventario validado."));
     }
 
     [HttpPost("parse-headers")]

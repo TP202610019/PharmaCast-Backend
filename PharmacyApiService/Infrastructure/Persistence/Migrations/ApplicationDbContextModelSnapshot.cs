@@ -178,6 +178,10 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("double precision")
                         .HasColumnName("lower_bound");
 
+                    b.Property<DateTime?>("PeriodEnd")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("period_end");
+
                     b.Property<double>("PredictedQuantity")
                         .HasColumnType("double precision")
                         .HasColumnName("predicted_quantity");
@@ -444,7 +448,7 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("double precision")
                         .HasColumnName("pharma_cast_total_sobrestock_soles");
 
-                    b.Property<double>("PharmaCastWape")
+                    b.Property<double?>("PharmaCastWape")
                         .HasColumnType("double precision")
                         .HasColumnName("pharma_cast_wape");
 
@@ -554,7 +558,7 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
 
-                    b.Property<double>("Wape")
+                    b.Property<double?>("Wape")
                         .HasColumnType("double precision")
                         .HasColumnName("wape");
 
@@ -582,6 +586,10 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("completed_at");
+
+                    b.Property<double?>("ConfidenceLevel")
+                        .HasColumnType("double precision")
+                        .HasColumnName("confidence_level");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
@@ -614,6 +622,14 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(20)")
                         .HasColumnName("execution_status");
 
+                    b.Property<string>("ForecastFrequency")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasDefaultValue("Daily")
+                        .HasColumnName("forecast_frequency");
+
                     b.Property<int>("ForecastPeriod")
                         .HasColumnType("integer")
                         .HasColumnName("forecast_period");
@@ -629,6 +645,10 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                     b.Property<double?>("NewProductsUnits")
                         .HasColumnType("double precision")
                         .HasColumnName("new_products_units");
+
+                    b.Property<string>("ProductCategories")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("product_categories");
 
                     b.Property<DateTime?>("StartedAt")
                         .HasColumnType("timestamp with time zone")
@@ -865,6 +885,10 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                     b.Property<double?>("ToPurchase")
                         .HasColumnType("double precision")
                         .HasColumnName("to_purchase");
+
+                    b.Property<decimal?>("UnitPurchaseCost")
+                        .HasColumnType("numeric")
+                        .HasColumnName("unit_purchase_cost");
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")

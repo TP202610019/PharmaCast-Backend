@@ -11,6 +11,9 @@ public class PredictionExecution : BaseEntity
     public User User { get; set; } = null!;
 
     public int ForecastPeriod { get; set; }
+    public string ForecastFrequency { get; set; } = "Daily";
+    public double? ConfidenceLevel { get; set; }
+    public Dictionary<string, string>? ProductCategories { get; set; }
     public ExecutionStatus ExecutionStatus { get; set; } = ExecutionStatus.Pending;
     public DateTime? StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }

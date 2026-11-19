@@ -178,6 +178,16 @@ public class PredictionService : IPredictionService
                 "[PREDICT-5] ML Service responded — status={Status}, forecastEntries={ForecastCount}, productMetrics={ProductCount}",
                 mlResponse.Status, mlResponse.Forecast.Count, mlResponse.ProductMetrics.Count);
 
+            if (mlResponse.ForecastFrequency != "Weekly" || mlResponse.Forecast.Any(f => !f.PeriodEnd.HasValue))
+                throw new ValidationException("forecast", "El servicio ML debe devolver bloques semanales con fecha final.");
+            var expectedBlocks = (request.ForecastPeriod + 6) / 7;
+            if (mlResponse.Forecast.Count == 0 || mlResponse.Forecast.Any(f => !double.IsFinite(f.PredictedQuantity) || f.PredictedQuantity < 0)
+                || mlResponse.Forecast.GroupBy(f => f.ProductId).Any(g => g.Count() != expectedBlocks
+                    || !g.Select(f => f.ForecastStep).Order().SequenceEqual(Enumerable.Range(1, expectedBlocks))))
+                throw new ValidationException("forecast", "El servicio ML devolvió semanas incompletas o cantidades inválidas.");
+            execution.ForecastFrequency = mlResponse.ForecastFrequency;
+            execution.ConfidenceLevel = mlResponse.ConfidenceLevel;
+            execution.ProductCategories = fieldDict.ContainsKey("category") ? mlResponse.ProductCategories : null;
             // ── 5a. Persist forecast results ──────────────────────────────────
             var forecastResults = mlResponse.Forecast
                 .Select(f =>
@@ -197,6 +207,7 @@ public class PredictionService : IPredictionService
                         PredictionExecutionId = execution.Id,
                         ProductName           = f.ProductId,
                         ForecastDate          = utcDate,
+                        PeriodEnd             = f.PeriodEnd,
                         ForecastStep          = f.ForecastStep,
                         PredictedQuantity     = f.PredictedQuantity,
                         LowerBound            = null,
@@ -218,6 +229,7 @@ public class PredictionService : IPredictionService
                 {
                     ProductName       = f.ProductName,
                     ForecastDate      = f.ForecastDate,
+                    PeriodEnd         = f.PeriodEnd,
                     ForecastStep      = f.ForecastStep,
                     PredictedQuantity = f.PredictedQuantity,
                     LowerBound        = f.LowerBound,
@@ -305,6 +317,9 @@ public class PredictionService : IPredictionService
             Id                 = execution.Id,
             DatasetId          = execution.DatasetId,
             ForecastPeriod     = execution.ForecastPeriod,
+            ForecastFrequency  = execution.ForecastFrequency,
+            ConfidenceLevel    = execution.ConfidenceLevel,
+            ProductCategories  = execution.ProductCategories,
             ExecutionStatus    = execution.ExecutionStatus,
             StartedAt          = execution.StartedAt,
             CompletedAt        = execution.CompletedAt,
@@ -339,17 +354,27 @@ public class PredictionService : IPredictionService
 
     public async Task<IReadOnlyList<PredictionSummaryResponse>> GetHistoryAsync(Guid userId, CancellationToken ct = default)
     {
-        var executions = await _predictions.GetByUserAsync(userId, ct);
-        return executions.Select(e => new PredictionSummaryResponse
+        return await _db.PredictionExecutions.AsNoTracking()
+            .Where(e => e.ExecutedBy == userId)
+            .OrderByDescending(e => e.CreatedAt)
+            .Select(e => new PredictionSummaryResponse
         {
             Id              = e.Id,
             DatasetId       = e.DatasetId,
-            DatasetName     = e.Dataset?.OriginalFileName ?? string.Empty,
+            DatasetName     = e.Dataset.OriginalFileName,
             ForecastPeriod  = e.ForecastPeriod,
             ExecutionStatus = e.ExecutionStatus,
             CompletedAt     = e.CompletedAt,
-            CreatedAt       = e.CreatedAt
-        }).ToList();
+            CreatedAt       = e.CreatedAt,
+            TotalProducts   = e.ExecutionStatus == ExecutionStatus.Completed
+                ? e.ForecastResults.Select(f => f.ProductName).Distinct().Count() : null,
+            TotalUnits      = e.ExecutionStatus == ExecutionStatus.Completed
+                ? e.ForecastResults.Sum(f => f.PredictedQuantity) : null,
+            Accuracy        = e.ExecutionStatus == ExecutionStatus.Completed
+                ? e.PredictionMetrics.Where(m => m.Scope == MetricScope.Overall && m.Method == MetricMethod.XGBoost)
+                    .Select(m => 100.0 - m.TotalErrorPercentage).FirstOrDefault()
+                : null
+        }).ToListAsync(ct);
     }
 
     private async Task SaveHistoryAsync(Guid datasetId, List<MLHistoricalEntry> points, CancellationToken ct)
@@ -442,6 +467,9 @@ public class PredictionService : IPredictionService
         Id              = e.Id,
         DatasetId       = e.DatasetId,
         ForecastPeriod  = e.ForecastPeriod,
+        ForecastFrequency = e.ForecastFrequency,
+        ConfidenceLevel = e.ConfidenceLevel,
+        ProductCategories = e.ProductCategories,
         ExecutionStatus = e.ExecutionStatus,
         StartedAt       = e.StartedAt,
         CompletedAt     = e.CompletedAt,
@@ -458,6 +486,7 @@ public class PredictionService : IPredictionService
         {
             ProductName       = f.ProductName,
             ForecastDate      = f.ForecastDate,
+            PeriodEnd         = f.PeriodEnd,
             ForecastStep      = f.ForecastStep,
             PredictedQuantity = f.PredictedQuantity,
             LowerBound        = f.LowerBound,

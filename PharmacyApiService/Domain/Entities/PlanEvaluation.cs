@@ -14,7 +14,7 @@ public class PlanEvaluation : BaseEntity
     // PharmaCast accuracy
     public int    PharmaCastGoodCount  { get; set; }
     public double PharmaCastGoodPct    { get; set; }
-    public double PharmaCastWape       { get; set; }
+    public double? PharmaCastWape       { get; set; }
 
     // Pharmacy plan accuracy (nullable — only when HasPharmacyPlan)
     public int?    PharmacyGoodCount  { get; set; }

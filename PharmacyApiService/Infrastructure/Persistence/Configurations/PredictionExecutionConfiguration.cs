@@ -13,11 +13,19 @@ public class PredictionExecutionConfiguration : IEntityTypeConfiguration<Predict
         builder.HasKey(x => x.Id);
 
         builder.Property(x => x.ForecastPeriod).IsRequired();
+        builder.Property(x => x.ForecastFrequency).HasMaxLength(10).HasDefaultValue("Daily").IsRequired();
         builder.Property(x => x.ExecutionStatus)
             .IsRequired()
             .HasConversion<string>()
             .HasMaxLength(20);
         builder.Property(x => x.ErrorMessage).HasMaxLength(1000);
+        builder.Property(x => x.ProductCategories).HasColumnType("jsonb")
+            .HasConversion(v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                v => JsonSerializer.Deserialize<Dictionary<string, string>>(v, (JsonSerializerOptions?)null))
+            .Metadata.SetValueComparer(new ValueComparer<Dictionary<string, string>?>(
+                (a, b) => JsonSerializer.Serialize(a, (JsonSerializerOptions?)null) == JsonSerializer.Serialize(b, (JsonSerializerOptions?)null),
+                v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null).GetHashCode(),
+                v => v == null ? null : new Dictionary<string, string>(v)));
         builder.Property(x => x.ArtifactPaths).HasColumnType("jsonb")
             .HasConversion(v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
                 v => JsonSerializer.Deserialize<Dictionary<string, string>>(v, (JsonSerializerOptions?)null)!)

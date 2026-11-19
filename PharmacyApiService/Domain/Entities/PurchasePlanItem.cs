@@ -13,4 +13,5 @@ public class PurchasePlanItem : BaseEntity
     public string? Category { get; set; }
     public string? Supplier { get; set; }
     public double? EstimatedCost { get; set; }
+    public decimal? UnitPurchaseCost { get; set; }
 }
