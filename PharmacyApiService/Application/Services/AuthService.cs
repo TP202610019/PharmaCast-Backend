@@ -40,6 +40,16 @@ public class AuthService : IAuthService
         return await CreateSessionAsync(user, ipAddress, userAgent, ct);
     }
 
+    // Public access is limited to the same account protected by DemoReadOnlyMiddleware.
+    public async Task<AuthResponse> LoginDemoAsync(string? ipAddress, string? userAgent, CancellationToken ct = default)
+    {
+        var email = _config["DemoAccount:Email"] ?? "test@pharmacy.dev";
+        var user = await _users.GetByEmailAsync(email, ct);
+        if (user is null || !user.IsActive)
+            throw new ForbiddenException("La cuenta demo no está disponible por el momento.");
+        return await CreateSessionAsync(user, ipAddress, userAgent, ct);
+    }
+
     public async Task<AuthResponse> RegisterAsync(RegisterRequest request, CancellationToken ct = default)
     {
         if (await _users.EmailExistsAsync(request.Email, ct))

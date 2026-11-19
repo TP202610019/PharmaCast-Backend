@@ -14,7 +14,7 @@ public sealed class DemoReadOnlyMiddleware(RequestDelegate next)
         var path = context.Request.Path.Value?.TrimEnd('/') ?? "";
         var safe = HttpMethods.IsGet(context.Request.Method) || HttpMethods.IsHead(context.Request.Method)
             || HttpMethods.IsOptions(context.Request.Method);
-        var sessionAction = new[] { "/api/auth/login", "/api/auth/register", "/api/auth/refresh", "/api/auth/logout" }
+        var sessionAction = new[] { "/api/auth/login", "/api/auth/demo", "/api/auth/register", "/api/auth/refresh", "/api/auth/logout" }
             .Contains(path, StringComparer.OrdinalIgnoreCase);
         if (context.User.Identity?.IsAuthenticated == true && DemoAccountPolicy.IsDemoEmail(email, configuration)
             && !safe && !sessionAction)

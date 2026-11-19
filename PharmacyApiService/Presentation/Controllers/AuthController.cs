@@ -28,6 +28,14 @@ public class AuthController : ControllerBase
         return Ok(ApiResponse<AuthResponse>.Ok(result, "Login successful."));
     }
 
+    [HttpPost("demo")]
+    [AllowAnonymous]
+    public async Task<ActionResult<ApiResponse<AuthResponse>>> Demo(CancellationToken ct)
+    {
+        var result = await _auth.LoginDemoAsync(HttpContext.Connection.RemoteIpAddress?.ToString(), Request.Headers.UserAgent.ToString(), ct);
+        return Ok(ApiResponse<AuthResponse>.Ok(result));
+    }
+
     [HttpPost("register")]
     [AllowAnonymous]
     public async Task<ActionResult<ApiResponse<AuthResponse>>> Register([FromBody] RegisterRequest request, CancellationToken ct)
