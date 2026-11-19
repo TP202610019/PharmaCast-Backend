@@ -587,6 +587,10 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("completed_at");
 
+                    b.Property<double?>("ConfidenceLevel")
+                        .HasColumnType("double precision")
+                        .HasColumnName("confidence_level");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
@@ -641,6 +645,10 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                     b.Property<double?>("NewProductsUnits")
                         .HasColumnType("double precision")
                         .HasColumnName("new_products_units");
+
+                    b.Property<string>("ProductCategories")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("product_categories");
 
                     b.Property<DateTime?>("StartedAt")
                         .HasColumnType("timestamp with time zone")

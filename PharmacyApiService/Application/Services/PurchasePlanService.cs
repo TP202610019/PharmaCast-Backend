@@ -83,6 +83,8 @@ public class PurchasePlanService : IPurchasePlanService
                 DemandPredicted   = demandPredicted,
                 StockActual       = stockActual,
                 ToPurchase        = toPurchase,
+                Category          = execution.ProductCategories?.GetValueOrDefault(g.Key) is { Length: <= 100 } category
+                    ? category : null,
                 RecommendedQuantity = Math.Ceiling(toPurchase),
             };
         }).ToList();

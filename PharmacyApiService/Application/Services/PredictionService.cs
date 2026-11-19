@@ -186,6 +186,8 @@ public class PredictionService : IPredictionService
                     || !g.Select(f => f.ForecastStep).Order().SequenceEqual(Enumerable.Range(1, expectedBlocks))))
                 throw new ValidationException("forecast", "El servicio ML devolvió semanas incompletas o cantidades inválidas.");
             execution.ForecastFrequency = mlResponse.ForecastFrequency;
+            execution.ConfidenceLevel = mlResponse.ConfidenceLevel;
+            execution.ProductCategories = fieldDict.ContainsKey("category") ? mlResponse.ProductCategories : null;
             // ── 5a. Persist forecast results ──────────────────────────────────
             var forecastResults = mlResponse.Forecast
                 .Select(f =>
@@ -316,6 +318,8 @@ public class PredictionService : IPredictionService
             DatasetId          = execution.DatasetId,
             ForecastPeriod     = execution.ForecastPeriod,
             ForecastFrequency  = execution.ForecastFrequency,
+            ConfidenceLevel    = execution.ConfidenceLevel,
+            ProductCategories  = execution.ProductCategories,
             ExecutionStatus    = execution.ExecutionStatus,
             StartedAt          = execution.StartedAt,
             CompletedAt        = execution.CompletedAt,
@@ -464,6 +468,8 @@ public class PredictionService : IPredictionService
         DatasetId       = e.DatasetId,
         ForecastPeriod  = e.ForecastPeriod,
         ForecastFrequency = e.ForecastFrequency,
+        ConfidenceLevel = e.ConfidenceLevel,
+        ProductCategories = e.ProductCategories,
         ExecutionStatus = e.ExecutionStatus,
         StartedAt       = e.StartedAt,
         CompletedAt     = e.CompletedAt,

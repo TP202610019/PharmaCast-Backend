@@ -7,6 +7,8 @@ namespace PharmacyApiService.Application.Models.ML;
 public class MLPredictionResponse
 {
     public string ForecastFrequency { get; set; } = "Daily";
+    public double? ConfidenceLevel { get; set; }
+    public Dictionary<string, string>? ProductCategories { get; set; }
     public string PredictionExecutionId { get; set; } = string.Empty;
     public string DatasetId { get; set; } = string.Empty;
 
@@ -95,5 +97,7 @@ public class MLForecastEntry
 
     public int ForecastStep { get; set; }
     public double PredictedQuantity { get; set; }
+    public double? LowerBound { get; set; }
+    public double? UpperBound { get; set; }
 }
 
