@@ -1,3 +1,4 @@
+using PharmacyApiService.Shared;
 using System.ComponentModel.DataAnnotations;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
@@ -27,6 +28,8 @@ public sealed class RecoveryController(
     [HttpPost("request")]
     public async Task<IActionResult> RequestCode(EmailRequest request, CancellationToken ct)
     {
+        if (DemoAccountPolicy.IsDemoEmail(request.Email, config))
+            return StatusCode(403, new { code = "DEMO_READ_ONLY", message = "La cuenta demo no permite cambiar su contraseña." });
         var publicKey = config["EmailJs:PublicKey"];
         var privateKey = config["EmailJs:PrivateKey"];
         if (string.IsNullOrWhiteSpace(publicKey) || string.IsNullOrWhiteSpace(privateKey))
@@ -86,6 +89,8 @@ public sealed class RecoveryController(
     [HttpPost("reset")]
     public async Task<IActionResult> Reset(ResetRequest request, CancellationToken ct)
     {
+        if (DemoAccountPolicy.IsDemoEmail(request.Email, config))
+            return StatusCode(403, new { code = "DEMO_READ_ONLY", message = "La cuenta demo no permite cambiar su contraseña." });
         if (!request.Password.Any(char.IsAsciiLetterUpper) || !request.Password.Any(char.IsAsciiDigit))
             return BadRequest(new { message = "Incluye una letra mayúscula y un número en la contraseña." });
         if (Encoding.UTF8.GetByteCount(request.Password) > 72)

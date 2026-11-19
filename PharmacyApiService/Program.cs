@@ -89,6 +89,7 @@ app.UseCors();
 if (!app.Environment.IsDevelopment() && !app.Configuration.GetValue<bool>("ReverseProxy:TerminatesHttps"))
     app.UseHttpsRedirection();
 app.UseAuthentication();
+app.UseMiddleware<DemoReadOnlyMiddleware>();
 app.UseAuthorization();
 app.MapControllers();
 
