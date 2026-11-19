@@ -46,7 +46,7 @@ public class PurchasePlanService : IPurchasePlanService
             throw new ConflictException("A purchase plan already exists for this execution.");
 
         // Read inventory stock if provided
-        Dictionary<string, double> stockMap = [];
+        Dictionary<string, (double Stock, decimal? UnitPurchaseCost)> stockMap = [];
         if (request.InventoryDatasetId.HasValue)
         {
             var fields = request.InventoryFieldMappings;
@@ -55,9 +55,10 @@ public class PurchasePlanService : IPurchasePlanService
             var stockCol = fields?.GetValueOrDefault("stock");
             if (string.IsNullOrWhiteSpace(productCol) || string.IsNullOrWhiteSpace(stockCol))
                 throw new ValidationException("inventory", "Mapea las columnas de producto y stock del inventario.");
-            stockMap = await _datasets.ReadInventoryStockAsync(
-                request.InventoryDatasetId.Value, userId, productCol, stockCol, ct);
-            if (stockMap.Count == 0 || stockMap.Values.Any(v => !double.IsFinite(v) || v < 0))
+            stockMap = await _datasets.ReadInventoryAsync(
+                request.InventoryDatasetId.Value, userId, productCol, stockCol,
+                fields?.GetValueOrDefault("purchase_cost"), ct);
+            if (stockMap.Count == 0 || stockMap.Values.Any(v => !double.IsFinite(v.Stock) || v.Stock < 0))
                 throw new ValidationException("inventory", "El inventario debe contener productos con stock válido y no negativo.");
         }
 
@@ -70,22 +71,27 @@ public class PurchasePlanService : IPurchasePlanService
         var items = productGroups.Select(g =>
         {
             var demandPredicted = g.Sum(f => f.PredictedQuantity);
-            double? stockActual = hasInventory && stockMap.TryGetValue(g.Key, out var stock) ? stock : null;
+            var found = stockMap.TryGetValue(g.Key, out var inventory);
+            double? stockActual = found ? inventory.Stock : null;
             if (hasInventory && !stockActual.HasValue)
                 throw new ValidationException("inventory", $"El producto '{g.Key}' no tiene stock informado. Incluye una fila con cero si no hay existencias.");
             var toPurchase      = stockActual.HasValue
                 ? Math.Max(0, demandPredicted - stockActual.Value)
                 : demandPredicted;
 
+            var recommendedQuantity = Math.Ceiling(toPurchase);
             return new PurchasePlanItem
             {
                 ProductName       = g.Key,
+                Category          = execution.ProductCategories?.GetValueOrDefault(g.Key) is { Length: <= 100 } category
+                    ? category : null,
                 DemandPredicted   = demandPredicted,
                 StockActual       = stockActual,
                 ToPurchase        = toPurchase,
-                Category          = execution.ProductCategories?.GetValueOrDefault(g.Key) is { Length: <= 100 } category
-                    ? category : null,
-                RecommendedQuantity = Math.Ceiling(toPurchase),
+                RecommendedQuantity = recommendedQuantity,
+                UnitPurchaseCost = inventory.UnitPurchaseCost,
+                EstimatedCost = inventory.UnitPurchaseCost is decimal cost
+                    ? (double)CalculateInvestment(recommendedQuantity, cost) : null,
             };
         }).ToList();
 
@@ -523,7 +529,36 @@ public class PurchasePlanService : IPurchasePlanService
             ToPurchase = i.ToPurchase,
             Category = i.Category,
             Supplier = i.Supplier,
-            EstimatedCost = i.EstimatedCost
+            EstimatedCost = i.EstimatedCost,
+            UnitPurchaseCost = i.UnitPurchaseCost
         }).ToList()
     };
 }
+    private static string? CalculatePriority(double? demandPredicted, double? stockActual)
+    {
+        if (demandPredicted is not double demand || !double.IsFinite(demand) || demand < 0)
+            return null;
+        if (demand == 0)
+            return "none";
+        if (stockActual is not double stock || !double.IsFinite(stock) || stock < 0)
+            return null;
+
+        return (stock / Math.Ceiling(demand)) switch
+        {
+            < 0.25 => "critical",
+            < 0.50 => "high",
+            < 1.00 => "medium",
+            _ => "low"
+        };
+    }
+
+    private static decimal CalculateInvestment(double quantity, decimal cost) =>
+        Math.Round((decimal)quantity * cost, 2, MidpointRounding.AwayFromZero);
+
+        ItemsMissingPurchaseCost = p.Items.Count(i => i.RecommendedQuantity > 0 && i.UnitPurchaseCost == null),
+        TotalEstimatedCost = p.Items.Any(i => i.UnitPurchaseCost.HasValue)
+            && p.Items.All(i => i.RecommendedQuantity <= 0 || i.UnitPurchaseCost.HasValue)
+                ? p.Items.Sum(i => i.UnitPurchaseCost is decimal cost
+                    ? CalculateInvestment(i.RecommendedQuantity, cost) : 0m)
+                : null,
+            Priority = CalculatePriority(i.DemandPredicted, i.StockActual),

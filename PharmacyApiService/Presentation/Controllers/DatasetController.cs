@@ -77,6 +77,17 @@ public class DatasetController : ControllerBase
         return Ok(ApiResponse<IReadOnlyList<string>>.Ok(headers));
     }
 
+    [HttpPost("{id:guid}/validate-inventory")]
+    public async Task<ActionResult<ApiResponse>> ValidateInventory(
+        Guid id, [FromQuery] string productColumn, [FromQuery] string stockColumn, [FromQuery] string? purchaseCostColumn, CancellationToken ct)
+    {
+        var stock = await _service.ReadInventoryAsync(id, User.GetUserId(), productColumn, stockColumn, purchaseCostColumn, ct);
+        if (stock.Count == 0)
+            return UnprocessableEntity(ApiResponse.Fail(ResponseCodes.ValidationError,
+                "No se pudo leer el archivo de inventario. Vuelve a subirlo."));
+        return Ok(ApiResponse.Ok("Inventario validado."));
+    }
+
     [HttpPost("parse-headers")]
     [RequestSizeLimit(AppConstants.MaxFileSizeBytes)]
     public ActionResult<ApiResponse<IReadOnlyList<string>>> ParseHeaders(IFormFile file)

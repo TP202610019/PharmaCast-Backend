@@ -28,7 +28,7 @@ public class PredictionResponse
     public List<PredictionMetricResponse> ProductMetrics { get; set; } = [];
     public List<PredictionMetricResponse> BaselineMetrics { get; set; } = [];
     public List<PredictionMetricResponse> BaselineProductMetrics { get; set; } = [];
-    public IEnumerable<PredictionProductSummary> ProductSummaries => ForecastResults.GroupBy(f => f.ProductName).Select(g =>
+    public IEnumerable<PredictionProductSummary> ProductSummaries
     {
         get
         {
@@ -70,6 +70,7 @@ public class PredictionResponse
 
 public class PredictionSummaryResponse
 {
+    public int? CriticalCount { get; set; }
     public int? TotalProducts { get; set; }
     public double? TotalUnits { get; set; }
     public double? Accuracy { get; set; }
@@ -85,9 +86,9 @@ public class PredictionSummaryResponse
 public class PredictionProductSummary
 {
     public string ProductName { get; set; } = string.Empty;
-    public double TotalPredicted { get; set; }
     public string? Category { get; set; }
     public string? Trend { get; set; }
+    public double TotalPredicted { get; set; }
     public double AverageDailyPredicted { get; set; }
     public double? HistoricalAvg { get; set; }
     public double? VariationPercent { get; set; }

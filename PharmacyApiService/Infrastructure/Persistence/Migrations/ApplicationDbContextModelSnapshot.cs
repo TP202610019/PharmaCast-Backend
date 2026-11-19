@@ -886,6 +886,10 @@ namespace PharmacyApiService.Infrastructure.Persistence.Migrations
                         .HasColumnType("double precision")
                         .HasColumnName("to_purchase");
 
+                    b.Property<decimal?>("UnitPurchaseCost")
+                        .HasColumnType("numeric")
+                        .HasColumnName("unit_purchase_cost");
+
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
