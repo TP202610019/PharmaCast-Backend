@@ -18,7 +18,7 @@ public interface IPurchasePlanService
         string? pharmacyProductCol,
         string? pharmacyQuantityCol,
         Guid userId,
-        CancellationToken ct = default);
+        CancellationToken ct = default, string? salesDateColumn = null, bool confirmOutsidePeriod = false);
 
     Task<PlanEvaluationResponse?> GetLatestEvaluationAsync(Guid planId, Guid userId, CancellationToken ct = default);
 }

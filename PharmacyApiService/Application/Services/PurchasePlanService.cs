@@ -145,7 +145,7 @@ public class PurchasePlanService : IPurchasePlanService
         string? pharmacyProductCol,
         string? pharmacyQuantityCol,
         Guid userId,
-        CancellationToken ct = default)
+        CancellationToken ct = default, string? salesDateColumn = null, bool confirmOutsidePeriod = false)
     {
         var plan = await _plans.GetWithItemsAsync(planId, ct)
             ?? throw new NotFoundException(nameof(PurchasePlan), planId);
@@ -154,7 +154,24 @@ public class PurchasePlanService : IPurchasePlanService
         if (execution?.ExecutedBy != userId)
             throw new ForbiddenException();
 
-        var (actualSales, actualPrices) = ParseCsvColumns(actualSalesFile, productCol, quantityCol, priceCol);
+        if (string.IsNullOrWhiteSpace(salesDateColumn))
+            throw new ValidationException("salesDateColumn", "Selecciona la columna con la fecha de venta.");
+
+        var period = await _db.ForecastResults
+            .Where(f => f.PredictionExecutionId == plan.PredictionExecutionId)
+            .GroupBy(f => f.PredictionExecutionId)
+            .Select(g => new { Start = g.Min(f => f.ForecastDate), End = g.Max(f => f.PeriodEnd ?? f.ForecastDate) })
+            .SingleOrDefaultAsync(ct);
+        if (period is null)
+            throw new ValidationException("salesDateColumn", "El plan no tiene un período de predicción verificable.");
+
+        var (actualSales, actualPrices, firstSale, lastSale) = ParseEvaluationFile(
+            actualSalesFile, productCol, quantityCol, priceCol, salesDateColumn, (period.Start.Date, period.End.Date));
+        if (actualSales.Count == 0)
+            throw new ValidationException("salesDateColumn", "El archivo no contiene ventas dentro del período del plan.");
+        if (!confirmOutsidePeriod && (firstSale < period.Start.Date || lastSale > period.End.Date))
+            throw new ValidationException("salesOutsideForecastPeriod",
+                $"Las ventas ({firstSale:yyyy-MM-dd} a {lastSale:yyyy-MM-dd}) incluyen fechas fuera del período del plan ({period.Start:yyyy-MM-dd} a {period.End:yyyy-MM-dd}). Confirma para evaluar solo las filas dentro del período.");
 
         bool hasPrice = !string.IsNullOrWhiteSpace(priceCol) && actualPrices.Count > 0;
 
@@ -164,7 +181,7 @@ public class PurchasePlanService : IPurchasePlanService
         {
             if (string.IsNullOrWhiteSpace(pharmacyProductCol) || string.IsNullOrWhiteSpace(pharmacyQuantityCol))
                 throw new ValidationException("pharmacyPlan", "Mapea producto y cantidad del plan de la farmacia.");
-            (pharmacyPlan, _) = ParseCsvColumns(pharmacyPlanFile!, pharmacyProductCol, pharmacyQuantityCol, null);
+            (pharmacyPlan, _, _, _) = ParseEvaluationFile(pharmacyPlanFile!, pharmacyProductCol, pharmacyQuantityCol, null);
         }
 
         static double CalcAbsError(double planned, double actual) =>
@@ -319,7 +336,7 @@ public class PurchasePlanService : IPurchasePlanService
         _db.PlanEvaluations.Add(evaluation);
         await _db.SaveChangesAsync(ct);
 
-        return new PlanEvaluationResponse { PlanId = planId.ToString(), Summary = summary, Items = items };
+        return new PlanEvaluationResponse { PlanId = planId.ToString(), Summary = summary, Items = RankEvaluationItems(items) };
     }
 
     public async Task<PlanEvaluationResponse?> GetLatestEvaluationAsync(Guid planId, Guid userId, CancellationToken ct = default)
@@ -372,11 +389,16 @@ public class PurchasePlanService : IPurchasePlanService
             PharmacyDesabastoSoles  = i.PharmacyDesabastoSoles,
         }).ToList();
 
-        return new PlanEvaluationResponse { PlanId = planId.ToString(), Summary = summary, Items = items };
+        return new PlanEvaluationResponse { PlanId = planId.ToString(), Summary = summary, Items = RankEvaluationItems(items) };
     }
 
-    private static (Dictionary<string, double> primary, Dictionary<string, double> secondary)
-        ParseCsvColumns(IFormFile file, string productCol, string primaryCol, string? secondaryCol)
+    private static List<PlanEvaluationItemResponse> RankEvaluationItems(List<PlanEvaluationItemResponse> items) =>
+        items.OrderByDescending(i => Math.Abs(i.PharmaCastDifference))
+            .ThenBy(i => i.ProductName, StringComparer.OrdinalIgnoreCase).ToList();
+
+    private static (Dictionary<string, double> primary, Dictionary<string, double> secondary, DateTime? firstSale, DateTime? lastSale)
+        ParseEvaluationFile(IFormFile file, string productCol, string primaryCol, string? secondaryCol,
+            string? dateColumn = null, (DateTime Start, DateTime End)? period = null)
     {
         var constraint = DatasetFileValidator.GetConstraintError(file);
         if (constraint is not null) throw new ValidationException("file", constraint);
@@ -402,6 +424,13 @@ public class PurchasePlanService : IPurchasePlanService
         var productIndex = Column(productCol);
         var quantityIndex = Column(primaryCol);
         var priceIndex = string.IsNullOrWhiteSpace(secondaryCol) ? -1 : Column(secondaryCol);
+        var dateIndex = dateColumn is null ? -1 : Column(dateColumn);
+        var selectedColumns = new[] { productIndex, quantityIndex, priceIndex, dateIndex }.Where(i => i >= 0).ToArray();
+        if (selectedColumns.Distinct().Count() != selectedColumns.Length)
+            throw new ValidationException("mapping", "Asigna una columna distinta a cada campo de la evaluación.");
+        DateTime? firstSale = null;
+        DateTime? lastSale = null;
+        string[] formats = ["yyyy-M-d", "d/M/yyyy", "d-M-yyyy", "yyyy-MM-dd HH:mm:ss"];
         double Number(int index)
         {
             var raw = reader.GetValue(index);
@@ -414,13 +443,26 @@ public class PurchasePlanService : IPurchasePlanService
         while (reader.Read())
         {
             if (Enumerable.Range(0, reader.FieldCount).All(i => string.IsNullOrWhiteSpace(reader.GetValue(i)?.ToString()))) continue;
+            if (dateIndex >= 0)
+            {
+                var rawDate = reader.GetValue(dateIndex);
+                if (rawDate is not DateTime date &&
+                    !DateTime.TryParseExact(rawDate?.ToString()?.Trim(), formats,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out date))
+                    throw new ValidationException("salesDateColumn", $"Fecha inválida en '{headers[dateIndex]}'. Usa AAAA-MM-DD o DD/MM/AAAA.");
+                if (!firstSale.HasValue || date.Date < firstSale.Value) firstSale = date.Date;
+                if (!lastSale.HasValue || date.Date > lastSale.Value) lastSale = date.Date;
+                if (period is { } range && (date.Date < range.Start || date.Date > range.End)) continue;
+            }
             var product = reader.GetValue(productIndex)?.ToString()?.Trim();
             if (string.IsNullOrWhiteSpace(product)) throw new ValidationException("file", "Hay filas sin nombre de producto.");
             primary[product] = primary.GetValueOrDefault(product) + Number(quantityIndex);
             if (priceIndex >= 0) secondary[product] = Number(priceIndex);
         }
-        if (primary.Count == 0) throw new ValidationException("file", "El archivo debe contener al menos una fila de datos.");
-        return (primary, secondary);
+        if (primary.Count == 0 && !firstSale.HasValue)
+            throw new ValidationException("file", "El archivo debe contener al menos una fila de datos.");
+        return (primary, secondary, firstSale, lastSale);
     }
 
     private static (Dictionary<string, double> primary, Dictionary<string, double> secondary)
@@ -512,28 +554,6 @@ public class PurchasePlanService : IPurchasePlanService
         return (primary, secondary);
     }
 
-    private static PurchasePlanResponse MapToResponse(PurchasePlan p) => new()
-    {
-        Id = p.Id,
-        PredictionExecutionId = p.PredictionExecutionId,
-        PlanName = p.PlanName,
-        GeneratedAt = p.GeneratedAt,
-        CreatedAt = p.CreatedAt,
-        Items = p.Items.Select(i => new PurchasePlanItemResponse
-        {
-            Id = i.Id,
-            ProductName = i.ProductName,
-            RecommendedQuantity = i.RecommendedQuantity,
-            DemandPredicted = i.DemandPredicted,
-            StockActual = i.StockActual,
-            ToPurchase = i.ToPurchase,
-            Category = i.Category,
-            Supplier = i.Supplier,
-            EstimatedCost = i.EstimatedCost,
-            UnitPurchaseCost = i.UnitPurchaseCost
-        }).ToList()
-    };
-}
     private static string? CalculatePriority(double? demandPredicted, double? stockActual)
     {
         if (demandPredicted is not double demand || !double.IsFinite(demand) || demand < 0)
@@ -555,10 +575,32 @@ public class PurchasePlanService : IPurchasePlanService
     private static decimal CalculateInvestment(double quantity, decimal cost) =>
         Math.Round((decimal)quantity * cost, 2, MidpointRounding.AwayFromZero);
 
+    private static PurchasePlanResponse MapToResponse(PurchasePlan p) => new()
+    {
+        Id = p.Id,
+        PredictionExecutionId = p.PredictionExecutionId,
+        PlanName = p.PlanName,
+        GeneratedAt = p.GeneratedAt,
+        CreatedAt = p.CreatedAt,
         ItemsMissingPurchaseCost = p.Items.Count(i => i.RecommendedQuantity > 0 && i.UnitPurchaseCost == null),
         TotalEstimatedCost = p.Items.Any(i => i.UnitPurchaseCost.HasValue)
             && p.Items.All(i => i.RecommendedQuantity <= 0 || i.UnitPurchaseCost.HasValue)
                 ? p.Items.Sum(i => i.UnitPurchaseCost is decimal cost
                     ? CalculateInvestment(i.RecommendedQuantity, cost) : 0m)
                 : null,
+        Items = p.Items.Select(i => new PurchasePlanItemResponse
+        {
+            Id = i.Id,
+            ProductName = i.ProductName,
+            RecommendedQuantity = i.RecommendedQuantity,
+            DemandPredicted = i.DemandPredicted,
+            StockActual = i.StockActual,
             Priority = CalculatePriority(i.DemandPredicted, i.StockActual),
+            ToPurchase = i.ToPurchase,
+            Category = i.Category,
+            Supplier = i.Supplier,
+            EstimatedCost = i.EstimatedCost,
+            UnitPurchaseCost = i.UnitPurchaseCost
+        }).ToList()
+    };
+}
