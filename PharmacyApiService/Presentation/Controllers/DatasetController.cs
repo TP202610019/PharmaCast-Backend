@@ -21,7 +21,7 @@ public class DatasetController : ControllerBase
     }
 
     [HttpPost("upload")]
-    [RequestSizeLimit(AppConstants.MaxFileSizeBytes)]
+    [RequestSizeLimit(AppConstants.MaxFileSizeBytes + 64 * 1024)]
     public async Task<ActionResult<ApiResponse<DatasetResponse>>> Upload(
         IFormFile file,
         [FromQuery] Guid? mappingConfigId,
