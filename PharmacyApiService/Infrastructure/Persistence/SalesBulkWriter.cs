@@ -19,7 +19,7 @@ public static class SalesBulkWriter
             await writer.WriteAsync(row.Id, NpgsqlDbType.Uuid, ct);
             await writer.WriteAsync(row.DatasetId, NpgsqlDbType.Uuid, ct);
             await writer.WriteAsync(row.ProductName, NpgsqlDbType.Text, ct);
-            await writer.WriteAsync(row.Date, NpgsqlDbType.TimestampTz, ct);
+            await writer.WriteAsync(UtcTimestamp.Normalize(row.Date), NpgsqlDbType.TimestampTz, ct);
             await writer.WriteAsync(row.Quantity, NpgsqlDbType.Double, ct);
         }
         await writer.CompleteAsync(ct);
@@ -36,8 +36,8 @@ public static class SalesBulkWriter
             await writer.WriteAsync(row.Id, NpgsqlDbType.Uuid, ct);
             await writer.WriteAsync(row.PredictionExecutionId, NpgsqlDbType.Uuid, ct);
             await writer.WriteAsync(row.ProductName, NpgsqlDbType.Text, ct);
-            await writer.WriteAsync(row.ForecastDate, NpgsqlDbType.TimestampTz, ct);
-            if (row.PeriodEnd.HasValue) await writer.WriteAsync(row.PeriodEnd.Value, NpgsqlDbType.TimestampTz, ct);
+            await writer.WriteAsync(UtcTimestamp.Normalize(row.ForecastDate), NpgsqlDbType.TimestampTz, ct);
+            if (row.PeriodEnd.HasValue) await writer.WriteAsync(UtcTimestamp.Normalize(row.PeriodEnd.Value), NpgsqlDbType.TimestampTz, ct);
             else await writer.WriteNullAsync(ct);
             if (row.ForecastStep.HasValue) await writer.WriteAsync(row.ForecastStep.Value, NpgsqlDbType.Integer, ct);
             else await writer.WriteNullAsync(ct);
@@ -46,8 +46,8 @@ public static class SalesBulkWriter
             else await writer.WriteNullAsync(ct);
             if (row.UpperBound.HasValue) await writer.WriteAsync(row.UpperBound.Value, NpgsqlDbType.Double, ct);
             else await writer.WriteNullAsync(ct);
-            await writer.WriteAsync(row.CreatedAt, NpgsqlDbType.TimestampTz, ct);
-            if (row.UpdatedAt.HasValue) await writer.WriteAsync(row.UpdatedAt.Value, NpgsqlDbType.TimestampTz, ct);
+            await writer.WriteAsync(UtcTimestamp.Normalize(row.CreatedAt), NpgsqlDbType.TimestampTz, ct);
+            if (row.UpdatedAt.HasValue) await writer.WriteAsync(UtcTimestamp.Normalize(row.UpdatedAt.Value), NpgsqlDbType.TimestampTz, ct);
             else await writer.WriteNullAsync(ct);
         }
         await writer.CompleteAsync(ct);

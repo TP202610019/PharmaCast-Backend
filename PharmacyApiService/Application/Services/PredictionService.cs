@@ -194,9 +194,7 @@ public class PredictionService : IPredictionService
                 {
                     var rawDate = DateTime.Parse(f.Date, null, System.Globalization.DateTimeStyles.RoundtripKind);
                     // Npgsql 9.x requires Kind=Utc for 'timestamp with time zone' — treat naive dates as UTC
-                    var utcDate = rawDate.Kind == DateTimeKind.Utc
-                        ? rawDate
-                        : DateTime.SpecifyKind(rawDate, DateTimeKind.Utc);
+                    var utcDate = UtcTimestamp.Normalize(rawDate);
 
                     _logger.LogDebug(
                         "[PERSIST-FORECAST] productId={Product} rawDate='{Raw}' parsedKind={Kind} utcDate='{Utc}'",
@@ -207,7 +205,7 @@ public class PredictionService : IPredictionService
                         PredictionExecutionId = execution.Id,
                         ProductName           = f.ProductId,
                         ForecastDate          = utcDate,
-                        PeriodEnd             = f.PeriodEnd,
+                        PeriodEnd             = f.PeriodEnd.HasValue ? UtcTimestamp.Normalize(f.PeriodEnd.Value) : null,
                         ForecastStep          = f.ForecastStep,
                         PredictedQuantity     = f.PredictedQuantity,
                         LowerBound            = null,
