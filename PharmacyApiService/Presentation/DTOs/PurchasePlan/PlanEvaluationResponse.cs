@@ -6,9 +6,14 @@ public class PlanEvaluationItemResponse
     public double ActualSold { get; set; }
     public double PharmaCastPlan { get; set; }
     public double? PharmacyPlan { get; set; }
+    public double PharmaCastDifference => PharmaCastPlan - ActualSold;
+    public double? PharmacyDifference => PharmacyPlan - ActualSold;
+    public double PharmaCastAbsoluteGap => Math.Abs(PharmaCastDifference);
+    public double? PharmacyAbsoluteGap => PharmacyDifference is double difference ? Math.Abs(difference) : null;
+    public double? GapReductionUnits => PharmacyAbsoluteGap - PharmaCastAbsoluteGap;
     public string PharmaCastAccuracy { get; set; } = string.Empty;
     public string? PharmacyAccuracy { get; set; }
-    public double Wape { get; set; }
+    public double? Wape { get; set; }
     public double? PharmacyWape { get; set; }
     public double SobrestockSoles { get; set; }
     public double DesabastoSoles { get; set; }
@@ -25,7 +30,7 @@ public class PlanEvaluationSummaryResponse
     public bool HasPrice { get; set; }
     public double PharmaCastGoodPct { get; set; }
     public double PharmacyGoodPct { get; set; }
-    public double PharmaCastWape { get; set; }
+    public double? PharmaCastWape { get; set; }
     public double? PharmacyWape { get; set; }
     public double PharmaCastTotalSobrestockSoles { get; set; }
     public double PharmaCastTotalDesabastoSoles { get; set; }
@@ -38,4 +43,10 @@ public class PlanEvaluationResponse
     public string PlanId { get; set; } = string.Empty;
     public PlanEvaluationSummaryResponse Summary { get; set; } = new();
     public List<PlanEvaluationItemResponse> Items { get; set; } = [];
+    public double PharmaCastTotalAbsoluteGap => Items.Sum(item => item.PharmaCastAbsoluteGap);
+    public double? PharmacyTotalAbsoluteGap => Summary.HasPharmacyPlan
+        && Items.Count > 0 && Items.All(item => item.PharmacyAbsoluteGap.HasValue)
+        ? Items.Sum(item => item.PharmacyAbsoluteGap!.Value)
+        : null;
+    public double? TotalGapReductionUnits => PharmacyTotalAbsoluteGap - PharmaCastTotalAbsoluteGap;
 }

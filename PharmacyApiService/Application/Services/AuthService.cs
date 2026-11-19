@@ -102,6 +102,30 @@ public class AuthService : IAuthService
         return MapUserToProfile(user);
     }
 
+    public async Task ChangePasswordAsync(Guid userId, ChangePasswordRequest request, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(request.CurrentPassword))
+            throw new ValidationException("currentPassword", "Ingresa tu contraseña actual.");
+
+        var password = request.NewPassword ?? string.Empty;
+        if (password.Length < 8)
+            throw new ValidationException("newPassword", "La nueva contraseña debe tener al menos 8 caracteres.");
+        if (System.Text.Encoding.UTF8.GetByteCount(password) > 72)
+            throw new ValidationException("newPassword", "La nueva contraseña supera la longitud permitida.");
+        if (!password.Any(c => c is >= 'A' and <= 'Z') || !password.Any(c => c is >= '0' and <= '9'))
+            throw new ValidationException("newPassword", "Incluye una mayúscula y un número.");
+
+        var user = await _users.GetByIdAsync(userId, ct);
+        if (user is null || !user.IsActive)
+            throw new ForbiddenException("La cuenta no está activa.");
+        if (!BCrypt.Net.BCrypt.Verify(request.CurrentPassword, user.PasswordHash))
+            throw new ValidationException("currentPassword", "La contraseña actual es incorrecta.");
+
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(password);
+        _users.Update(user);
+        await _users.SaveChangesAsync(ct);
+    }
+
     private async Task<AuthResponse> CreateSessionAsync(User user, string? ipAddress, string? userAgent, CancellationToken ct)
     {
         var refreshTokenDays = int.Parse(_config["Jwt:RefreshTokenDays"] ?? "7");

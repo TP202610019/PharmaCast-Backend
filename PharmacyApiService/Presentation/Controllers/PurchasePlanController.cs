@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using PharmacyApiService.Application.Interfaces.Services;
 using PharmacyApiService.Presentation.DTOs.PurchasePlan;
+using PharmacyApiService.Shared.Constants;
 using PharmacyApiService.Shared.Extensions;
 using PharmacyApiService.Shared.Wrappers;
 
@@ -46,6 +47,7 @@ public class PurchasePlanController : ControllerBase
 
     [HttpPost("{id:guid}/evaluate")]
     [Consumes("multipart/form-data")]
+    [RequestSizeLimit(2 * AppConstants.MaxFileSizeBytes + 64 * 1024)]
     public async Task<ActionResult<ApiResponse<PlanEvaluationResponse>>> Evaluate(
         Guid id,
         IFormFile actualSalesFile,
@@ -55,11 +57,13 @@ public class PurchasePlanController : ControllerBase
         IFormFile? pharmacyPlanFile,
         [FromForm] string? pharmacyProductCol,
         [FromForm] string? pharmacyQuantityCol,
+        [FromForm] string salesDateColumn,
+        [FromForm] bool confirmOutsidePeriod,
         CancellationToken ct)
     {
         var userId = User.GetUserId();
         var result = await _service.EvaluateAsync(id, actualSalesFile, productCol, quantityCol,
-            priceCol, pharmacyPlanFile, pharmacyProductCol, pharmacyQuantityCol, userId, ct);
+            priceCol, pharmacyPlanFile, pharmacyProductCol, pharmacyQuantityCol, userId, ct, salesDateColumn, confirmOutsidePeriod);
         return Ok(ApiResponse<PlanEvaluationResponse>.Ok(result, "Evaluación completada."));
     }
 

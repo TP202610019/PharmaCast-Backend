@@ -171,6 +171,8 @@ public class DatasetService : IDatasetService
         {
             if (dataset.MappingConfigurationId != mapping.Id)
                 throw new ConflictException("El dataset ya fue confirmado con otro mapeo.");
+            if (request.FieldType == "sales")
+                await ValidateHistoryRangeAsync(dataset, mapping, ct);
             return MapToResponse(dataset);
         }
         if (dataset.DatasetStage != DatasetStage.Temporary || dataset.UploadStatus != UploadStatus.Pending)
@@ -361,11 +363,12 @@ public class DatasetService : IDatasetService
         }
     }
 
-    public async Task<Dictionary<string, double>> ReadInventoryStockAsync(
+    public async Task<Dictionary<string, (double Stock, decimal? UnitPurchaseCost)>> ReadInventoryAsync(
         Guid datasetId,
         Guid userId,
         string productColumn,
         string stockColumn,
+        string? purchaseCostColumn,
         CancellationToken ct = default)
     {
         var dataset = await _datasets.GetByIdAsync(datasetId, ct)
@@ -382,119 +385,88 @@ public class DatasetService : IDatasetService
             return [];
 
         await using (stream)
-            return ReadStockFromStream(stream, dataset.FileType, productColumn, stockColumn);
+            return ReadInventoryFromStream(stream, dataset.FileType, productColumn, stockColumn, purchaseCostColumn);
     }
 
-    private static Dictionary<string, double> ReadStockFromStream(
-        Stream stream, FileType fileType, string productColumn, string stockColumn)
+    private static Dictionary<string, (double Stock, decimal? UnitPurchaseCost)> ReadInventoryFromStream(
+        Stream stream, FileType fileType, string productColumn, string stockColumn, string? purchaseCostColumn)
     {
-        return fileType == FileType.CSV
-            ? ReadStockFromCsv(stream, productColumn, stockColumn)
-            : ReadStockFromExcel(stream, productColumn, stockColumn);
-    }
-
-    private static Dictionary<string, double> ReadStockFromCsv(
-        Stream stream, string productColumn, string stockColumn)
-    {
-        using var reader = new StreamReader(stream, leaveOpen: true);
-        var result = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-
-        var headerLine = reader.ReadLine();
-        if (headerLine is null) return result;
-
-        if (headerLine.Length > 0 && headerLine[0] == '﻿')
-            headerLine = headerLine[1..];
-
-        var delimiter = DetectCsvDelimiter(headerLine);
-        var headers = SplitCsvLine(headerLine, delimiter)
-            .Select(h => h.Trim().Trim('"'))
-            .ToArray();
-
-        var productIdx = FindColumnIndex(headers, productColumn);
-        var stockIdx   = FindColumnIndex(headers, stockColumn);
-        if (productIdx < 0 || stockIdx < 0) return result;
-
-        while (reader.ReadLine() is string line)
+        using var seekableCopy = new MemoryStream();
+        if (!stream.CanSeek)
         {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            var cells = SplitCsvLine(line, delimiter);
-            if (cells.Length <= Math.Max(productIdx, stockIdx)) continue;
-
-            var name  = cells[productIdx].Trim().Trim('"');
-            var rawQty = cells[stockIdx].Trim().Trim('"');
-            if (string.IsNullOrWhiteSpace(name)) continue;
-            if (double.TryParse(rawQty, System.Globalization.NumberStyles.Any,
-                System.Globalization.CultureInfo.InvariantCulture, out var qty))
-                result[name] = qty;
+            stream.CopyTo(seekableCopy);
+            seekableCopy.Position = 0;
         }
 
-        return result;
-    }
-
-    private static Dictionary<string, double> ReadStockFromExcel(
-        Stream stream, string productColumn, string stockColumn)
-    {
+        var input = stream.CanSeek ? stream : seekableCopy;
         var config = new ExcelReaderConfiguration
         {
             FallbackEncoding = System.Text.Encoding.GetEncoding(1252),
-            LeaveOpen = false,
+            AutodetectSeparators = [',', ';', '\t'],
+            LeaveOpen = true,
         };
+        using var reader = fileType == FileType.CSV
+            ? ExcelReaderFactory.CreateCsvReader(input, config)
+            : ExcelReaderFactory.CreateReader(input, config);
 
-        var result = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-        // Excel readers require seeking, which downloaded blob streams may not support.
-        using var seekableCopy = new MemoryStream();
-        if (!stream.CanSeek)
-            stream.CopyTo(seekableCopy);
-        seekableCopy.Position = 0;
-        using var excelReader = ExcelReaderFactory.CreateReader(
-            stream.CanSeek ? stream : seekableCopy, config);
+        if (!reader.Read())
+            throw new ValidationException("inventory", "El archivo de inventario está vacío.");
 
-        do
+        var headers = Enumerable.Range(0, reader.FieldCount)
+            .Select(i => reader.GetValue(i)?.ToString()?.Trim().TrimStart('\uFEFF') ?? "")
+            .ToArray();
+        int FindColumn(string name)
         {
-            int colCount = excelReader.FieldCount;
-            int productIdx = -1, stockIdx = -1;
-            bool headerFound = false;
-
-            while (excelReader.Read())
-            {
-                if (!headerFound)
-                {
-                    // Find header row
-                    var rowHeaders = Enumerable.Range(0, colCount)
-                        .Select(i => excelReader.GetValue(i)?.ToString()?.Trim() ?? "")
-                        .ToArray();
-
-                    productIdx = FindColumnIndex(rowHeaders, productColumn);
-                    stockIdx   = FindColumnIndex(rowHeaders, stockColumn);
-
-                    if (productIdx >= 0 && stockIdx >= 0)
-                        headerFound = true;
-                    continue;
-                }
-
-                var name   = excelReader.GetValue(productIdx)?.ToString()?.Trim();
-                var rawQty = excelReader.GetValue(stockIdx)?.ToString()?.Trim();
-
-                if (string.IsNullOrWhiteSpace(name)) continue;
-                if (double.TryParse(rawQty, System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture, out var qty))
-                    result[name] = qty;
-            }
-
-            if (result.Count > 0) break;
+            var matches = Enumerable.Range(0, headers.Length)
+                .Where(i => string.Equals(headers[i], name.Trim(), StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (matches.Length != 1)
+                throw new ValidationException("inventory", $"La columna '{name}' debe existir una sola vez en el inventario.");
+            return matches[0];
         }
-        while (excelReader.NextResult());
 
-        return result;
-    }
+        var productIndex = FindColumn(productColumn);
+        var stockIndex = FindColumn(stockColumn);
+        int? costIndex = string.IsNullOrWhiteSpace(purchaseCostColumn) ? null : FindColumn(purchaseCostColumn);
+        if (productIndex == stockIndex || costIndex == productIndex || costIndex == stockIndex)
+            throw new ValidationException("inventory", "Asigna columnas distintas para producto, stock y costo de compra.");
 
-    private static int FindColumnIndex(string[] headers, string columnName)
-    {
-        var target = columnName.ToLowerInvariant().Trim();
-        for (int i = 0; i < headers.Length; i++)
-            if (headers[i].ToLowerInvariant().Trim() == target)
-                return i;
-        return -1;
+        var stock = new Dictionary<string, (double Stock, decimal? UnitPurchaseCost)>(StringComparer.OrdinalIgnoreCase);
+        var rowNumber = 1;
+        while (reader.Read())
+        {
+            rowNumber++;
+            if (Enumerable.Range(0, reader.FieldCount)
+                .All(i => string.IsNullOrWhiteSpace(reader.GetValue(i)?.ToString()))) continue;
+
+            var product = reader.GetValue(productIndex)?.ToString()?.Trim();
+            var quantity = Convert.ToString(reader.GetValue(stockIndex), CultureInfo.InvariantCulture);
+            if (string.IsNullOrWhiteSpace(product))
+                throw new ValidationException("inventory", $"La fila {rowNumber} no tiene producto.");
+            if (!double.TryParse(quantity, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+                || !double.IsFinite(value) || value < 0)
+                throw new ValidationException("inventory", $"La fila {rowNumber} tiene un stock inválido. Usa una cantidad no negativa.");
+            decimal? unitCost = null;
+            if (costIndex is int index)
+            {
+                var cost = Convert.ToString(reader.GetValue(index), CultureInfo.InvariantCulture)?.Trim();
+                if (!string.IsNullOrEmpty(cost))
+                {
+                    const NumberStyles styles = NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint;
+                    if ((!decimal.TryParse(cost, styles, CultureInfo.InvariantCulture, out var parsed) &&
+                         !decimal.TryParse(cost, styles, CultureInfo.GetCultureInfo("es-PE"), out parsed) &&
+                         !decimal.TryParse(cost, styles, CultureInfo.GetCultureInfo("es-ES"), out parsed)) || parsed < 0)
+                        throw new ValidationException("inventory", $"La fila {rowNumber} tiene un costo unitario de compra inválido.");
+                    unitCost = parsed;
+                }
+            }
+            if (!stock.TryAdd(product, (value, unitCost)))
+                throw new ValidationException("inventory", $"El producto '{product}' está repetido (fila {rowNumber}). Informa su stock total en una sola fila.");
+        }
+
+        if (stock.Count == 0)
+            throw new ValidationException("inventory", "El inventario debe contener al menos un producto con stock.");
+        return stock;
     }
 
     public IReadOnlyList<string> ParseFileHeaders(IFormFile file) => ExtractHeadersFromFormFile(file);

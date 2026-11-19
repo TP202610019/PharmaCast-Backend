@@ -13,7 +13,7 @@ public class PlanEvaluationItem : BaseEntity
     public string  PharmaCastAccuracy { get; set; } = string.Empty; // "good" | "ok" | "poor"
     public string? PharmacyAccuracy   { get; set; }
 
-    public double  Wape         { get; set; }
+    public double? Wape         { get; set; }
     public double? PharmacyWape { get; set; }
 
     public double  SobrestockSoles          { get; set; }

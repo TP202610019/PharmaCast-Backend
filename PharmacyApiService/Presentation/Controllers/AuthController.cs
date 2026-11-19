@@ -62,4 +62,12 @@ public class AuthController : ControllerBase
         var result = await _auth.GetProfileAsync(userId, ct);
         return Ok(ApiResponse<UserProfileResponse>.Ok(result));
     }
+
+    [HttpPost("change-password")]
+    [Authorize]
+    public async Task<ActionResult<ApiResponse>> ChangePassword([FromBody] ChangePasswordRequest request, CancellationToken ct)
+    {
+        await _auth.ChangePasswordAsync(User.GetUserId(), request, ct);
+        return Ok(ApiResponse.Ok("Contraseña actualizada."));
+    }
 }

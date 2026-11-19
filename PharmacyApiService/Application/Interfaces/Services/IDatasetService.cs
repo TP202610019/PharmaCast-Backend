@@ -12,6 +12,6 @@ public interface IDatasetService
     Task<DatasetResponse> ValidateAsync(Guid datasetId, Guid userId, CancellationToken ct = default);
     Task DeleteAsync(Guid datasetId, Guid userId, CancellationToken ct = default);
     Task<IReadOnlyList<string>> ExtractHeadersAsync(Guid datasetId, Guid userId, CancellationToken ct = default);
-    Task<Dictionary<string, double>> ReadInventoryStockAsync(Guid datasetId, Guid userId, string productColumn, string stockColumn, CancellationToken ct = default);
+    Task<Dictionary<string, (double Stock, decimal? UnitPurchaseCost)>> ReadInventoryAsync(Guid datasetId, Guid userId, string productColumn, string stockColumn, string? purchaseCostColumn, CancellationToken ct = default);
     IReadOnlyList<string> ParseFileHeaders(IFormFile file);
 }

@@ -10,7 +10,7 @@ public class DashboardSummaryResponse
     public ExecutionStatus? LatestStatus { get; set; }
     public double? Accuracy { get; set; }
     public int TotalProducts { get; set; }
-    public int CriticalCount { get; set; }
+    public int? CriticalCount { get; set; }
     public double TotalForecastedUnits { get; set; }
     public List<string> ProductNames { get; set; } = [];
     /// <summary>Column name mapped to "product" field_key in the saved mapping config.</summary>
