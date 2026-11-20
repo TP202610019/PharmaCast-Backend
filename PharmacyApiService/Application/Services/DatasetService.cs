@@ -31,7 +31,7 @@ public class DatasetService : IDatasetService
         _mappings = mappings;
         _blob = blob;
         _logger = logger;
-        _minimumHistoryMonths = Math.Max(1, configuration.GetValue("DatasetValidation:MinimumHistoryMonths", 4));
+        _minimumHistoryMonths = Math.Max(1, configuration.GetValue("DatasetValidation:MinimumHistoryMonths", 6));
     }
 
     // ── Upload ────────────────────────────────────────────────────────────────
