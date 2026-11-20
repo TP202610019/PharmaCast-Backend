@@ -127,6 +127,7 @@ public class PredictionService : IPredictionService
         _logger.LogInformation("[PREDICT-3] Execution record created — executionId={ExecutionId}", execution.Id);
 
         // ── 4. Resolve dataset path and call ML Service ───────────────────────
+        var stage = "Carga de datos";
         using var processingBudget = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         try
         {
@@ -161,7 +162,9 @@ public class PredictionService : IPredictionService
 
             // One shared five-minute budget covers ML and persistence.
             // Client disconnects do not cancel the execution independently.
+            stage = "Ejecución del modelo";
             var mlResponse = await _mlClient.PredictAsync(mlRequest, processingBudget.Token);
+            stage = "Guardado del histórico";
             await SaveHistoryAsync(dataset.Id, mlResponse.HistoricalPoints, processingBudget.Token);
             isDemo = mlResponse.IsDemo;
             execution.IsRetrain = mlResponse.IsRetrain;
@@ -178,6 +181,7 @@ public class PredictionService : IPredictionService
                 "[PREDICT-5] ML Service responded — status={Status}, forecastEntries={ForecastCount}, productMetrics={ProductCount}",
                 mlResponse.Status, mlResponse.Forecast.Count, mlResponse.ProductMetrics.Count);
 
+            stage = "Validación del pronóstico";
             if (mlResponse.ForecastFrequency != "Weekly" || mlResponse.Forecast.Any(f => !f.PeriodEnd.HasValue))
                 throw new ValidationException("forecast", "El servicio ML debe devolver bloques semanales con fecha final.");
             var expectedBlocks = (request.ForecastPeriod + 6) / 7;
@@ -188,6 +192,7 @@ public class PredictionService : IPredictionService
             execution.ForecastFrequency = mlResponse.ForecastFrequency;
             execution.ConfidenceLevel = mlResponse.ConfidenceLevel;
             execution.ProductCategories = fieldDict.ContainsKey("category") ? mlResponse.ProductCategories : null;
+            stage = "Guardado de resultados";
             // ── 5a. Persist forecast results ──────────────────────────────────
             var forecastResults = mlResponse.Forecast
                 .Select(f =>
@@ -273,7 +278,7 @@ public class PredictionService : IPredictionService
                 "[PREDICT-ERROR] Execution cancelled (client timeout or disconnect) — executionId={Id}", execution.Id);
 
             execution.ExecutionStatus = ExecutionStatus.Failed;
-            execution.ErrorMessage = "La predicción fue cancelada por tiempo de espera.";
+            execution.ErrorMessage = $"Etapa: {stage}. La predicción fue cancelada por tiempo de espera.";
             execution.CompletedAt = DateTime.UtcNow;
         }
         catch (Exception ex)
@@ -283,7 +288,10 @@ public class PredictionService : IPredictionService
                 ex.GetType().Name, ex.Message);
 
             execution.ExecutionStatus = ExecutionStatus.Failed;
-            execution.ErrorMessage = ex.Message;
+            var stageMessageStart = ex.Message.IndexOf("Etapa: ", StringComparison.Ordinal);
+            execution.ErrorMessage = stageMessageStart >= 0
+                ? ex.Message[stageMessageStart..]
+                : $"Etapa: {stage}. {ex.Message}";
             execution.CompletedAt = DateTime.UtcNow;
         }
 
