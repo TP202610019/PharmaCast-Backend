@@ -235,6 +235,16 @@ public class PurchasePlanService : IPurchasePlanService
             });
         if (hasPharmacyPlan && planKeys.Any(key => !normalizedPharmacy.ContainsKey(key)))
             throw new ValidationException("pharmacyPlan", "El plan de la farmacia debe informar cantidades para todos los productos evaluados, incluyendo ceros.");
+        var historicalStarts = await _db.HistoricalDailyPoints
+            .Where(point => point.DatasetId == execution.DatasetId && point.Date < period.Start)
+            .GroupBy(point => point.ProductName)
+            .Select(group => new { Product = group.Key, FirstDate = group.Min(point => point.Date) })
+            .ToListAsync(ct);
+        var firstDateByProduct = historicalStarts
+            .GroupBy(row => NormName(row.Product), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Min(row => row.FirstDate),
+                StringComparer.OrdinalIgnoreCase);
+
         // Only evaluate products that appear in the actual-sales CSV.
         var items = plan.Items
             .Where(i => normalizedSales.ContainsKey(NormName(i.ProductName)))
@@ -242,6 +252,17 @@ public class PurchasePlanService : IPurchasePlanService
             {
                 var key        = NormName(i.ProductName);
                 var actualSold = normalizedSales[key];
+                if (!firstDateByProduct.TryGetValue(key, out var firstHistoricalDate)
+                    || (period.Start.Date - firstHistoricalDate.Date).TotalDays < PlanEvaluationResponse.MinimumHistoryDays)
+                {
+                    return new PlanEvaluationItemResponse
+                    {
+                        ProductName = i.ProductName,
+                        ActualSold = actualSold,
+                        PharmaCastPlan = i.RecommendedQuantity,
+                        PharmaCastAccuracy = PlanEvaluationResponse.NotEvaluableStatus
+                    };
+                }
 
                 double pharmaCastPlan = i.RecommendedQuantity;
                 double? pharmacyQty = normalizedPharmacy.TryGetValue(key, out var qty) ? qty : null;
@@ -267,16 +288,16 @@ public class PurchasePlanService : IPurchasePlanService
                 };
             }).ToList();
 
-        int n         = items.Count;
-        if (n == 0) throw new ValidationException("products", "No hay productos coincidentes entre el plan y las ventas reales.");
-        int pcGood = items.Count(i => i.PharmaCastAccuracy == "good");
-        int pharmGood = items.Count(i => i.PharmacyAccuracy == "good");
-        int pharmacyCount = items.Count(i => i.PharmacyPlan.HasValue);
+        var evaluable = items.Where(item => item.PharmaCastAccuracy != PlanEvaluationResponse.NotEvaluableStatus).ToList();
+        int n = evaluable.Count;
+        int pcGood = evaluable.Count(i => i.PharmaCastAccuracy == "good");
+        int pharmGood = evaluable.Count(i => i.PharmacyAccuracy == "good");
+        int pharmacyCount = evaluable.Count(i => i.PharmacyPlan.HasValue);
 
-        double totalActual     = items.Sum(x => x.ActualSold);
-        double pcTotalAbsErr   = items.Sum(x => Math.Abs(x.PharmaCastPlan - x.ActualSold));
+        double totalActual     = evaluable.Sum(x => x.ActualSold);
+        double pcTotalAbsErr   = evaluable.Sum(x => Math.Abs(x.PharmaCastPlan - x.ActualSold));
         double pharmTotalAbsErr = hasPharmacyPlan
-            ? items.Where(x => x.PharmacyPlan.HasValue).Sum(x => Math.Abs(x.PharmacyPlan!.Value - x.ActualSold))
+            ? evaluable.Where(x => x.PharmacyPlan.HasValue).Sum(x => Math.Abs(x.PharmacyPlan!.Value - x.ActualSold))
             : 0;
 
         var summary = new PlanEvaluationSummaryResponse
@@ -286,16 +307,16 @@ public class PurchasePlanService : IPurchasePlanService
             HasPrice                       = hasPrice,
             PharmaCastGoodCount            = pcGood,
             PharmacyGoodCount              = pharmGood,
-            PharmaCastGoodPct              = Math.Round(100.0 * pcGood / n, 1),
+            PharmaCastGoodPct              = n > 0 ? Math.Round(100.0 * pcGood / n, 1) : 0,
             PharmacyGoodPct                = pharmacyCount > 0 ? Math.Round(100.0 * pharmGood / pharmacyCount, 1) : 0,
             PharmaCastWape                 = totalActual > 0 ? Math.Round(pcTotalAbsErr / totalActual * 100, 1) : null,
             PharmacyWape                   = hasPharmacyPlan && totalActual > 0
                 ? Math.Round(pharmTotalAbsErr / totalActual * 100, 1)
                 : null,
-            PharmaCastTotalSobrestockSoles = Math.Round(items.Sum(x => x.SobrestockSoles), 2),
-            PharmaCastTotalDesabastoSoles  = Math.Round(items.Sum(x => x.DesabastoSoles), 2),
-            PharmacyTotalSobrestockSoles   = hasPharmacyPlan ? Math.Round(items.Sum(x => x.PharmacySobrestockSoles ?? 0), 2) : null,
-            PharmacyTotalDesabastoSoles    = hasPharmacyPlan ? Math.Round(items.Sum(x => x.PharmacyDesabastoSoles  ?? 0), 2) : null,
+            PharmaCastTotalSobrestockSoles = Math.Round(evaluable.Sum(x => x.SobrestockSoles), 2),
+            PharmaCastTotalDesabastoSoles  = Math.Round(evaluable.Sum(x => x.DesabastoSoles), 2),
+            PharmacyTotalSobrestockSoles   = hasPharmacyPlan ? Math.Round(evaluable.Sum(x => x.PharmacySobrestockSoles ?? 0), 2) : null,
+            PharmacyTotalDesabastoSoles    = hasPharmacyPlan ? Math.Round(evaluable.Sum(x => x.PharmacyDesabastoSoles  ?? 0), 2) : null,
         };
 
         // Persist evaluation so the user can view it later without re-uploading files
@@ -336,7 +357,7 @@ public class PurchasePlanService : IPurchasePlanService
         _db.PlanEvaluations.Add(evaluation);
         await _db.SaveChangesAsync(ct);
 
-        return new PlanEvaluationResponse { PlanId = planId.ToString(), Summary = summary, Items = RankEvaluationItems(items) };
+        return BuildEvaluationResponse(planId, summary, items);
     }
 
     public async Task<PlanEvaluationResponse?> GetLatestEvaluationAsync(Guid planId, Guid userId, CancellationToken ct = default)
@@ -389,8 +410,20 @@ public class PurchasePlanService : IPurchasePlanService
             PharmacyDesabastoSoles  = i.PharmacyDesabastoSoles,
         }).ToList();
 
-        return new PlanEvaluationResponse { PlanId = planId.ToString(), Summary = summary, Items = RankEvaluationItems(items) };
+        return BuildEvaluationResponse(planId, summary, items);
     }
+
+    private static PlanEvaluationResponse BuildEvaluationResponse(Guid planId,
+        PlanEvaluationSummaryResponse summary, List<PlanEvaluationItemResponse> items) => new()
+    {
+        PlanId = planId.ToString(),
+        Summary = summary,
+        Items = RankEvaluationItems(items.Where(item =>
+            item.PharmaCastAccuracy != PlanEvaluationResponse.NotEvaluableStatus).ToList()),
+        NotEvaluableProducts = items.Where(item =>
+            item.PharmaCastAccuracy == PlanEvaluationResponse.NotEvaluableStatus)
+            .Select(item => item.ProductName).OrderBy(name => name).ToList()
+    };
 
     private static List<PlanEvaluationItemResponse> RankEvaluationItems(List<PlanEvaluationItemResponse> items) =>
         items.OrderByDescending(i => Math.Abs(i.PharmaCastDifference))

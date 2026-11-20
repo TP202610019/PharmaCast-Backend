@@ -40,6 +40,10 @@ public class PlanEvaluationSummaryResponse
 
 public class PlanEvaluationResponse
 {
+    public const int MinimumHistoryDays = 28;
+    public const string NotEvaluableStatus = "not_evaluable";
+    public int MinimumHistoricalDays => MinimumHistoryDays;
+    public List<string> NotEvaluableProducts { get; set; } = [];
     public string PlanId { get; set; } = string.Empty;
     public PlanEvaluationSummaryResponse Summary { get; set; } = new();
     public List<PlanEvaluationItemResponse> Items { get; set; } = [];
